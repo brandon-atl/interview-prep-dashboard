@@ -1519,8 +1519,29 @@ GROUP BY tier_level</code></pre>
             // Initialize countdown
             initializeInterviewCountdown();
             
-            // Load Google-specific interview data
-            loadGoogleInterviewData();
+            // Try to load sample data automatically
+            console.log('🔄 Auto-loading sample data...');
+            try {
+                await loadSampleData();
+                console.log('✅ Sample data loaded successfully');
+            } catch (error) {
+                console.log('⚠️ Could not auto-load data:', error.message);
+                // Initialize with minimal state
+                appState.extractedData = {
+                    company: 'Google Play',
+                    role: 'BI Data Analyst', 
+                    questions: [],
+                    stories: [],
+                    panelists: [],
+                    metrics: getDefaultMetrics(),
+                    strengths: ['Advanced SQL & BigQuery optimization', 'Large-scale data processing'],
+                    gaps: ['Google Cloud Platform experience', 'Play Points domain knowledge'],
+                    companyIntel: 'Click "Load From input_files" to load your interview materials.',
+                    culturalNotes: 'Google Play cultural insights will load with your files.'
+                };
+                updateDashboard();
+                updateDataStatus('Dashboard ready. Click "Load From input_files" to load your materials.', 'info');
+            }
             
             if (window.pdfjsLib) {
                 try {
@@ -4612,7 +4633,7 @@ GROUP BY m.member_id, total_points, tier_min_points, tier_max_points, last_activ
             // Multi-layered response based on concerns
             if (concerns.industry && (concerns.experience || concerns.gap)) {
                 approach = 'Reframe industry difference as advantage + prove transferable value';
-                evidence = `${yourStrengths.scale} matching Google's scale`;
+                evidence = `${yourStrengths.scale} matching Google scale`;
                 bridge = 'Analytics challenges are universal at scale - member segmentation = customer segmentation';
                 counterPoints = [
                     'Fresh perspective valuable for Year of Efficiency initiatives',
@@ -4668,7 +4689,7 @@ GROUP BY m.member_id, total_points, tier_min_points, tier_max_points, last_activ
             else if (concerns.culture || concerns.team) {
                 approach = 'Demonstrate collaborative success + cultural alignment';
                 evidence = yourStrengths.stakeholders + ' proves collaboration skills';
-                bridge = 'Your stakeholder-first approach matches Google's user focus';
+                bridge = "Your stakeholder-first approach matches Google's user focus";
                 counterPoints = [
                     'Cross-functional success with diverse stakeholders',
                     'Data democratization philosophy',
