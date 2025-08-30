@@ -2612,6 +2612,66 @@ GROUP BY tier_level</code></pre>
             }
         }
 
+        // Function to load strategic questions I should ask interviewers from Q&A Bank
+        async function loadStrategicQuestionsFromMarkdown() {
+            try {
+                console.log('🎤 Loading strategic questions from Google Q&A Bank.md...');
+                const res = await fetch('input_files/Google Q&A Bank.md');
+                if (!res.ok) {
+                    console.log('❌ Could not fetch Q&A file for strategic questions');
+                    return {};
+                }
+                
+                const text = await res.text();
+                const lines = text.split(/\r?\n/);
+                const strategicQuestions = {};
+                let currentPanelist = '';
+                let inStrategicSection = false;
+                
+                for (let i = 0; i < lines.length; i++) {
+                    const line = lines[i].trim();
+                    
+                    // Look for Strategic Questions Bank section
+                    if (line.match(/^## 🎤 STRATEGIC QUESTIONS BANK/)) {
+                        inStrategicSection = true;
+                        console.log('📋 Found Strategic Questions Bank section');
+                        continue;
+                    }
+                    
+                    // Stop if we hit the next major section
+                    if (inStrategicSection && line.match(/^## [^🎤]/)) {
+                        break;
+                    }
+                    
+                    if (inStrategicSection) {
+                        // Look for panelist headers like "### For Nikki Diman:"
+                        const panelistMatch = line.match(/^### For (.+):/);
+                        if (panelistMatch) {
+                            currentPanelist = panelistMatch[1].trim();
+                            strategicQuestions[currentPanelist] = [];
+                            console.log(`👤 Found strategic questions for: ${currentPanelist}`);
+                            continue;
+                        }
+                        
+                        // Look for numbered questions like '1. **"question text"**'
+                        const questionMatch = line.match(/^\d+\.\s*\*\*"(.+)"\*\*/);
+                        if (questionMatch && currentPanelist) {
+                            const question = questionMatch[1].trim();
+                            strategicQuestions[currentPanelist].push(question);
+                            console.log(`❓ Added strategic question: ${question.substring(0, 50)}...`);
+                        }
+                    }
+                }
+                
+                console.log(`✅ Extracted strategic questions for ${Object.keys(strategicQuestions).length} panelists`);
+                return strategicQuestions;
+                
+            } catch(e) { 
+                console.error('❌ Error loading strategic questions:', e);
+                return {}; 
+            }
+        }
+
         // Function to load STAR stories from input documents (.md/.docx/.pdf)
         async function loadSTARStoriesFromDocuments() {
             console.log('🔍 Loading STAR stories from Interview Playbook...');
@@ -3804,6 +3864,7 @@ GROUP BY tier_level</code></pre>
             
             // Questions: prefer Markdown bank, then CSV fallback
             let questions = [];
+            let strategicQuestions = {};
             try {
                 console.log('📋 Loading questions from Q&A Bank...');
                 const questionsFromMD = await loadQuestionsFromMarkdown();
@@ -3816,9 +3877,15 @@ GROUP BY tier_level</code></pre>
                     questions = questionsFromCSV;
                     console.log(`✅ Loaded ${questions.length} questions from CSV`);
                 }
+                
+                // Also load strategic questions I should ask them
+                console.log('🎤 Loading strategic questions...');
+                strategicQuestions = await loadStrategicQuestionsFromMarkdown();
+                console.log(`✅ Loaded strategic questions for ${Object.keys(strategicQuestions).length} interviewers`);
             } catch (error) {
                 console.log('❌ Could not load questions:', error);
                 questions = [];
+                strategicQuestions = {};
             }
 
             // STAR Stories from documents
@@ -3952,6 +4019,7 @@ GROUP BY tier_level</code></pre>
                 panelistQuestions,
                 questions: questions,
                 stories: stories,
+                strategicQuestions: strategicQuestions,
                 companyIntel: intel.markdown,
                 companyIntelSource: intel.source,
                 culturalNotes: `**Google Play Cultural Intelligence & Fit Signals:**
@@ -4152,30 +4220,41 @@ GROUP BY tier_level</code></pre>
         async function generatePanelistQuestion(name) {
             const questionDiv = document.getElementById(`question-${name.replace(/\s/g, '-')}`);
 
-            // First try to get questions from the Interview Playbook
-            let questions = appState.extractedData.panelistQuestions?.[name];
-            let questionSource = 'INTERVIEW PLAYBOOK';
-            let borderColor = '#8b5cf6';
+            // First try to get strategic questions I should ask them from Q&A Bank
+            let questions = appState.extractedData.strategicQuestions?.[name];
+            let questionSource = 'STRATEGIC QUESTIONS FROM Q&A BANK';
+            let borderColor = '#22c55e';
 
-            // If no questions exist for this panelist, generate AI questions
+            // If no strategic questions exist for this panelist, fallback to role-appropriate strategic questions
             if (!questions || questions.length === 0) {
-                const panelist = appState.extractedData.panelists.find(p => p.name === name);
-                if (panelist) {
-                    questions = await generateAIPanelistQuestions(panelist.name, panelist.role, panelist.archetype);
-                    questionSource = 'AI GENERATED';
-                    borderColor = '#22c55e';
+                // Generate strategic questions based on their role
+                if (name.includes('Nikki') || name.includes('Service Delivery')) {
+                    questions = [
+                        'What strategies work best when Product, Engineering, and Marketing have conflicting priorities?',
+                        'How does your team balance global metrics with local market insights?',
+                        'What upcoming AI initiatives are planned for Play Points in the next 6-12 months?'
+                    ];
+                } else if (name.includes('Brian') || name.includes('Associate Director')) {
+                    questions = [
+                        'How does the team balance technical debt with rapid feature development?',
+                        'What role do contractors typically play in driving strategic initiatives?',
+                        'What are the biggest technical challenges with 220M+ member data processing?'
+                    ];
+                } else if (name.includes('Jolly') || name.includes('Recruiter')) {
+                    questions = [
+                        'What typically drives contractor-to-FTE conversion decisions?',
+                        'What makes successful contractors stand out in your experience?',
+                        'What\'s the typical timeline for FTE transitions in analytics teams?'
+                    ];
+                } else {
+                    questions = [
+                        'What aspects of this role do you find most exciting?',
+                        'How would you describe the team culture and collaboration style?',
+                        'What growth opportunities exist for this position?'
+                    ];
                 }
-            }
-            
-            // Fallback to default questions if still none
-            if (!questions || questions.length === 0) {
-                questions = [
-                    'Tell me about a time you influenced stakeholders without formal authority.',
-                    'Describe a situation where you had to manage competing priorities.',
-                    'How do you ensure data quality when multiple teams depend on your analysis?'
-                ];
-                questionSource = 'DEFAULT';
-                borderColor = '#64748b';
+                questionSource = 'STRATEGIC QUESTIONS (FALLBACK)';
+                borderColor = '#fbbf24';
             }
             
             // Randomly select a question
@@ -4184,14 +4263,17 @@ GROUP BY tier_level</code></pre>
 
             questionDiv.innerHTML = `
                 <div style="padding: 1rem; background: white; border-radius: 0.5rem; border-left: 4px solid ${borderColor};">
-                    <div style="display: flex; align-items: center; margin-bottom: 0.5rem;">${questionSource === 'AI GENERATED' ? aiBadge() : ''}${questionSource === 'INTERVIEW PLAYBOOK' ? '<span class="source-note">From Interview Playbook</span>' : ''}</div>
-                    <strong>Strategic Question:</strong> ${selectedQuestion}
+                    <div style="display: flex; align-items: center; margin-bottom: 0.5rem;">
+                        ${questionSource.includes('Q&A BANK') ? '<span class="source-note">From Q&A Bank Strategic Questions</span>' : ''}
+                        ${questionSource.includes('FALLBACK') ? '<span class="source-note">Strategic Question (Fallback)</span>' : ''}
+                    </div>
+                    <strong>Strategic Question to Ask ${name}:</strong> "${selectedQuestion}"
                 </div>
             `;
 
-            const sourceMessage = questionSource === 'INTERVIEW PLAYBOOK' ? 'Question from Interview Playbook!' : 
-                                questionSource === 'AI GENERATED' ? 'AI-generated question based on your materials!' : 
-                                'Default question generated!';
+            const sourceMessage = questionSource.includes('Q&A BANK') ? 'Strategic question from Q&A Bank loaded!' : 
+                                questionSource.includes('FALLBACK') ? 'Strategic question generated for this interviewer!' : 
+                                'Strategic question ready!';
             showToast(sourceMessage, 'success');
         }
 
