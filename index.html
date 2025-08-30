@@ -2534,9 +2534,9 @@ GROUP BY tier_level</code></pre>
                 for (let i = 0; i < lines.length; i++) {
                     const line = lines[i].trim();
                     
-                    // Detect category sections like "## 📊 CATEGORY 1: ROLE-SPECIFIC TECHNICAL QUESTIONS"
-                    if (line.match(/^## [📊💼🤝] CATEGORY \d+:/)) {
-                        currentCategory = line.replace(/^## [📊💼🤝] CATEGORY \d+:\s*/, '').toLowerCase();
+                    // Detect category sections like "## CATEGORY 1: ROLE-SPECIFIC TECHNICAL QUESTIONS"
+                    if (line.match(/^## .*CATEGORY \d+:/)) {
+                        currentCategory = line.replace(/^## .*CATEGORY \d+:\s*/, '').toLowerCase();
                         console.log(`📂 Found category: ${currentCategory}`);
                         continue;
                     }
@@ -2883,11 +2883,9 @@ GROUP BY tier_level</code></pre>
                 
                 // Enhanced likely questions from Interview Playbook
                 brianInfo.likelyQuestions = [
-                    'How would you optimize a slow BigQuery query processing billions of transactions?',
-                    'Walk me through your approach to partitioning and clustering in BigQuery',
-                    'How do you balance technical debt with rapid feature development?',
-                    'Describe your experience with window functions and CTEs at scale',
-                    'How do you ensure query performance with billions of Play Points transactions?'
+                    'How does the team approach balancing technical debt with rapid feature development?',
+                    'What role do contractors typically play in driving strategic initiatives versus maintenance?',
+                    'What are the biggest technical challenges in processing data for 220M+ Play Points members?'
                 ];
                 
                 // Add enhanced interview preparation notes
@@ -3001,9 +2999,9 @@ GROUP BY tier_level</code></pre>
                     ],
                     interviewStyle: 'Technical depth validation, team collaboration scenarios',
                     likelyQuestions: [
-                        'How would you optimize a slow BigQuery query processing billions of Play Store transactions?',
-                        'How would you support the upcoming AI/ML integration for Play Points personalization?',
-                        'How does the team approach balancing technical debt with rapid feature development?'
+                        'How does the team approach balancing technical debt with rapid feature development?',
+                        'What role do contractors typically play in driving strategic initiatives versus maintenance?',
+                        'What are the biggest technical challenges in processing data for 220M+ Play Points members?'
                     ],
                     motivation: 'Validating technical depth and cultural alignment',
                     anxiety: 'Surface-level technical knowledge without practical application'
@@ -3027,9 +3025,9 @@ GROUP BY tier_level</code></pre>
                     ],
                     interviewStyle: 'Direct, enthusiastic, emphasize availability and technical readiness',
                     likelyQuestions: [
-                        'Why Google? Why contractor role?',
-                        'What\'s your 5-year goal?',
-                        'You mentioned potential for conversion to FTE - what typically drives those decisions?'
+                        'What typically drives contractor-to-FTE conversion decisions in data roles?',
+                        'With your 10 years supporting Google, what makes successful contractors stand out?',
+                        'What\'s the typical timeline for FTE transitions in the analytics team?'
                     ],
                     motivation: 'Ensuring smooth onboarding and long-term fit',
                     anxiety: 'Candidates not genuinely interested in the role or lacking availability'
@@ -4119,13 +4117,21 @@ GROUP BY tier_level</code></pre>
         async function generateCulturalAnalysis() {
             const culturalDiv = document.getElementById('culturalFit');
             
-            // Check if there's already content - if so, append instead of replacing
-            const hasExistingContent = culturalDiv.innerHTML.trim() && 
-                                     !culturalDiv.innerHTML.includes('Signals to Convey') && 
-                                     culturalDiv.innerHTML.length > 100;
+            // Check if there's already meaningful content loaded from files
+            const hasRealContent = culturalDiv.innerHTML.trim() && 
+                                 !culturalDiv.innerHTML.includes('How to Demonstrate Cultural Fit') &&
+                                 !culturalDiv.innerHTML.includes('Use data in every answer') &&
+                                 culturalDiv.innerHTML.length > 100;
+            
+            if (hasRealContent) {
+                // Don't overwrite existing cultural analysis data
+                console.log('✅ Preserving existing cultural fit analysis');
+                showToast('Cultural fit analysis already loaded!', 'info');
+                return;
+            }
             
             const analysisHTML = `
-                <div style="padding: 1rem; background: #f0f9ff; border-radius: 0.5rem; border-left: 4px solid #0ea5e9; ${hasExistingContent ? 'margin-top: 1rem;' : ''}">
+                <div style="padding: 1rem; background: #f0f9ff; border-radius: 0.5rem; border-left: 4px solid #0ea5e9;">
                     <div style="display: flex; align-items: center; margin-bottom: 0.5rem;">${aiBadge()}</div>
                     <p><strong>How to Demonstrate Cultural Fit:</strong></p>
                     <ul>
@@ -4137,13 +4143,8 @@ GROUP BY tier_level</code></pre>
                 </div>
             `;
             
-            if (hasExistingContent) {
-                culturalDiv.innerHTML += analysisHTML;
-            } else {
-                culturalDiv.innerHTML = analysisHTML;
-            }
-            
-            showToast('Cultural fit analysis generated!', 'success');
+            culturalDiv.innerHTML = analysisHTML;
+            showToast('Cultural fit guidance generated!', 'success');
         }
 
         async function generatePanelistQuestion(name) {
@@ -4843,11 +4844,32 @@ GROUP BY m.member_id, total_points, tier_min_points, tier_max_points, last_activ
                 strategy = `**"Let me address that comprehensively. [Situation] The question touches on important considerations for this role. [Task] My goal is to demonstrate not just capability, but exceptional fit for Play Points analytics. [Action] Looking at my background: I've managed Google-scale data (500M+ records), delivered quantified business impact ($3.2M retention improvement), and enabled 200+ stakeholders through intuitive analytics. Each of these directly applies to Play Points' challenges with 220M+ members. [Result] The outcome is clear: I can contribute immediately to your analytics needs while bringing fresh perspectives from cross-industry experience. The upcoming AI/ML integration particularly excites me as it combines my clustering expertise with Play Points' personalization goals."**`;
             }
             else {
-                // Default intelligent response
-                approach = 'Acknowledge concern + provide evidence + show enthusiasm';
-                evidence = 'Most relevant experience from your background';
-                bridge = 'Direct connection to Play Points priorities';
-                strategy = `**"That's an insightful question that deserves a thoughtful response. ${question.includes('?') ? 'To answer directly:' : 'Let me address that:'} My experience demonstrates exactly what you're looking for. ${Object.values(yourStrengths)[Math.floor(Math.random() * 5)]} directly applies to this challenge. What excites me most about Play Points is the opportunity to apply these skills to your 220M+ member ecosystem while contributing to the AI/ML expansion. Would you like me to elaborate on any specific aspect?"**`;
+                // Intelligent response based on question keywords
+                approach = 'Analyze question keywords + provide targeted evidence + show enthusiasm';
+                
+                let relevantStrength = '';
+                let specificApplication = '';
+                
+                if (questionLower.includes('data') || questionLower.includes('analytics')) {
+                    relevantStrength = yourStrengths.scale;
+                    specificApplication = "analyzing Play Points' 220M+ member behaviors to optimize tier progression";
+                } else if (questionLower.includes('stakeholder') || questionLower.includes('team') || questionLower.includes('management')) {
+                    relevantStrength = yourStrengths.stakeholders;
+                    specificApplication = "collaborating across Product, Engineering, and Marketing teams for Play Points optimization";
+                } else if (questionLower.includes('sql') || questionLower.includes('query') || questionLower.includes('performance')) {
+                    relevantStrength = yourStrengths.technical;
+                    specificApplication = "optimizing BigQuery performance for billion-row Play Store transaction datasets";
+                } else if (questionLower.includes('impact') || questionLower.includes('business') || questionLower.includes('value')) {
+                    relevantStrength = yourStrengths.impact;
+                    specificApplication = "driving measurable business outcomes through Play Points analytics";
+                } else {
+                    relevantStrength = yourStrengths.skills;
+                    specificApplication = "contributing immediately to Google Play's data challenges";
+                }
+                
+                evidence = relevantStrength;
+                bridge = `Specific application to ${specificApplication}`;
+                strategy = `**"${question.includes('?') ? 'To answer directly:' : 'Let me address that:'} My experience specifically demonstrates this capability. ${relevantStrength} directly applies to ${specificApplication}. What excites me most about this role is the opportunity to leverage these proven skills at Google's scale while contributing to the upcoming AI/ML integration. Would you like me to elaborate on how I'd approach this challenge in the Play Points context?"**`;
             }
             
             strategyDiv.innerHTML = `
@@ -5182,19 +5204,19 @@ GROUP BY m.member_id, total_points, tier_min_points, tier_max_points, last_activ
             const enhancements = {
                 'Customer Segmentation': {
                     result: story.result + '\n\n🚀 <strong>Enhanced Strategic Value:</strong> This customer segmentation methodology demonstrates the analytical rigor needed for Google Play Points tier optimization. The approach of building personas from transaction data and measuring retention impact would directly translate to analyzing 220M+ Play Points member behavior patterns and identifying opportunities to improve Gold-to-Platinum progression rates.',
-                    additionalMetrics: 'Methodology: Proven scalable | Application: Play Points ready | Transferability: High'
+                    additionalMetrics: '• Methodology: Proven scalable<br>• Application: Play Points ready<br>• Transferability: High'
                 },
                 'BigQuery Pipeline': {
                     result: story.result + '\n\n🚀 <strong>Enhanced Strategic Value:</strong> This BigQuery architecture experience demonstrates readiness for Google Play\'s billion-row analytics challenges. The optimization techniques and automated pipeline approach would directly support the upcoming AI/ML integration expansion, particularly for real-time Play Points engagement analytics and personalized recommendation systems.',
-                    additionalMetrics: 'Scale Ready: Billion+ rows | Architecture: Cloud-native | AI/ML: Pipeline ready'
+                    additionalMetrics: '• Scale Ready: Billion+ rows<br>• Architecture: Cloud-native<br>• AI/ML: Pipeline ready'
                 },
                 'Dashboard Adoption': {
                     result: story.result + '\n\n🚀 <strong>Enhanced Strategic Value:</strong> This stakeholder enablement approach demonstrates the cross-functional collaboration skills essential for Google Play\'s matrixed environment. The training methodology and self-service analytics framework would directly support the diverse stakeholder ecosystem spanning Product, Marketing, Finance, and Engineering teams.',
-                    additionalMetrics: 'Stakeholder Model: Cross-functional | Training: Scalable | Adoption: Proven'
+                    additionalMetrics: '• Stakeholder Model: Cross-functional<br>• Training: Scalable<br>• Adoption: Proven'
                 },
                 'Lean Six Sigma': {
                     result: story.result + '\n\n🚀 <strong>Enhanced Strategic Value:</strong> This process optimization expertise aligns perfectly with Google\'s "Year of Efficiency" focus. The systematic approach to identifying and eliminating bottlenecks would be valuable for streamlining Play Points analytics workflows and supporting the team\'s rapid scaling needs as the loyalty program continues to grow.',
-                    additionalMetrics: 'Process Excellence: Six Sigma certified | Efficiency Focus: Google-aligned | Scaling: Systematic'
+                    additionalMetrics: '• Process Excellence: Six Sigma certified<br>• Efficiency Focus: Google-aligned<br>• Scaling: Systematic'
                 }
             };
             
@@ -5214,7 +5236,7 @@ GROUP BY m.member_id, total_points, tier_min_points, tier_max_points, last_activ
             } else {
                 // Generic enhancement for other stories
                 story.result = story.result + '\n\n🚀 <strong>Enhanced Strategic Value:</strong> This achievement demonstrates the analytical problem-solving approach that would be valuable for Google Play\'s data challenges. The skills and methodology from this experience would transfer well to supporting Play Points analytics, stakeholder collaboration, and data-driven decision making in the Google ecosystem.';
-                story.additionalMetrics = 'Skills: Transferable | Methodology: Scalable | Readiness: High';
+                story.additionalMetrics = '• Skills: Transferable<br>• Methodology: Scalable<br>• Readiness: High';
             }
             
             showStoryDetail(index);
@@ -6072,11 +6094,9 @@ ${highlights.join('\n')}
                         'Your Lean Six Sigma background matches her process improvement experience'
                     ],
                     likelyQuestions: [
-                        'Given the regulatory changes requiring alternative app stores, how would you evolve analytics to track multi-platform distribution?',
-                        'With Google Play serving 3+ billion users globally, what are the biggest cross-cultural data challenges?',
-                        'How would you balance rapid AI development iteration with rigorous data governance requirements?',
-                        'Tell me about managing stakeholders with conflicting data requirements across different time zones',
-                        'Walk me through your approach to quality and velocity in data delivery'
+                        'How does your team balance standardized global metrics with local market insights for 220M+ Play Points members?',
+                        'What strategies work best when Product, Engineering, and Marketing have conflicting priorities?',
+                        'What specific AI initiatives are planned for Play Points personalization in the next 6-12 months?'
                     ]
                 };
 
@@ -6095,11 +6115,9 @@ ${highlights.join('\n')}
                     anxiety: 'Candidates who cannot demonstrate practical technical skills or explain complex concepts clearly',
                     focusAreas: 'SQL optimization, data modeling, BigQuery performance, technical problem-solving',
                     likelyQuestions: [
-                        'How would you optimize a slow BigQuery query processing billions of transactions?',
-                        'Walk me through designing a data model for Google Play Points analytics',
-                        'How do you approach data quality initiatives across multiple stakeholder groups?',
-                        'What techniques would you use to analyze user engagement patterns across 220+ million loyalty members?',
-                        'Explain your experience with vendor-client relationships in data analytics projects'
+                        'How does the team approach balancing technical debt with rapid feature development?',
+                        'What role do contractors typically play in driving strategic initiatives versus maintenance?',
+                        'What are the biggest technical challenges in processing data for 220M+ Play Points members?'
                     ]
                 };
 
