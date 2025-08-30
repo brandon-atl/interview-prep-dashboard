@@ -4803,13 +4803,18 @@ GROUP BY m.member_id, total_points, tier_min_points, tier_max_points, last_activ
                 return;
             }
             
-            // Your specific background strengths to leverage
+            // Extract actual strengths and stories from loaded content
+            const loadedStories = appState.extractedData.stories || [];
+            const loadedStrengths = appState.extractedData.strengths || [];
+            const companyIntel = appState.extractedData.companyIntel || '';
+            
+            // Build dynamic strengths from actual STAR stories and loaded content
             const yourStrengths = {
-                scale: '500M+ SKU records at Home Depot, 100M+ daily transactions at Trulieve',
-                impact: '$3.2M retention improvement, $2M cost savings, $15M error prevention',
-                technical: '95% query optimization (10min→30sec), 99.9% pipeline uptime',
-                stakeholders: '200+ stakeholders enabled, C-level presentations, 30% adoption increase',
-                skills: '8+ years advanced SQL, Snowflake/cloud expertise, statistical analysis, A/B testing'
+                scale: loadedStories.find(s => s.title?.includes('BigQuery') || s.title?.includes('Scale'))?.result || '500M+ SKU records at Home Depot, 100M+ daily transactions at Trulieve',
+                impact: loadedStories.find(s => s.result?.includes('$') || s.result?.includes('%'))?.result?.match(/(\$[\d.]+[MK]|\d+%[^,]*)/g)?.join(', ') || '$3.2M retention improvement, 12% customer acquisition',
+                technical: loadedStories.find(s => s.title?.includes('BigQuery') || s.title?.includes('SQL'))?.result || '95% query optimization (10min→30sec), 99.9% pipeline uptime',
+                stakeholders: loadedStories.find(s => s.title?.includes('Dashboard') || s.title?.includes('Stakeholder'))?.result || '200+ stakeholders enabled, C-level presentations, 30% adoption increase',
+                skills: loadedStrengths.slice(0, 3).join(', ') || '8+ years advanced SQL, Snowflake/cloud expertise, statistical analysis'
             };
             
             // Analyze question for key concerns and craft intelligent response
@@ -4869,7 +4874,9 @@ GROUP BY m.member_id, total_points, tier_min_points, tier_max_points, last_activ
                     'Business impact quantification expertise',
                     'Stakeholder enablement differentiator'
                 ];
-                strategy = `**"What differentiates me is the rare combination of three critical capabilities: First, I've already operated at Google scale - 500M+ records, 100M+ daily transactions - so there's no learning curve on data volume challenges. Second, I don't just build analytics, I drive adoption - increasing dashboard usage by 30% across 200+ stakeholders by focusing on user needs. Third, I quantify business impact in dollars - $3.2M retention improvement, $2M cost savings - which aligns with Google's Year of Efficiency focus. While others might excel in one area, I bring the complete package: technical depth, stakeholder success, and measurable business value."**`;
+                const relevantStory = loadedStories.find(s => s.title?.includes('Segmentation') || s.title?.includes('Pipeline') || s.result?.includes('$'));
+                const storyExample = relevantStory ? `For example, ${relevantStory.title} - ${relevantStory.result?.substring(0, 100)}...` : '';
+                strategy = `**"What differentiates me is the rare combination of three critical capabilities: First, I've already operated at Google scale - ${yourStrengths.scale} - so there's no learning curve on data volume challenges. Second, I don't just build analytics, I drive adoption - ${yourStrengths.stakeholders} by focusing on user needs. Third, I quantify business impact in dollars - ${yourStrengths.impact} - which aligns with Google's Year of Efficiency focus. ${storyExample} While others might excel in one area, I bring the complete package: technical depth, stakeholder success, and measurable business value."**`;
             }
             else if (concerns.contractor) {
                 approach = 'Reposition contractor as strategic advantage';
@@ -4880,7 +4887,8 @@ GROUP BY m.member_id, total_points, tier_min_points, tier_max_points, last_activ
                     'Motivated to prove value for conversion',
                     'Same quality commitment regardless of status'
                 ];
-                strategy = `**"Actually, the contractor structure benefits both of us. I'm available immediately - no 2-3 month notice period delaying your Play Points initiatives. This arrangement lets me prove my value quickly while you evaluate cultural fit without long-term commitment. My track record shows I deliver the same quality regardless of employment type - the $3.2M impact at Trulieve was as a contractor. I'm genuinely interested in FTE conversion as Google Play's scale and AI/ML roadmap represent my ideal long-term opportunity. Think of it as an extended working interview where I can contribute immediately to your Q4 goals."**`;
+                const contractorExample = loadedStories.find(s => s.title?.includes('Trulieve') || s.result?.includes('$'))?.result || '$3.2M impact at Trulieve';
+                strategy = `**"Actually, the contractor structure benefits both of us. I'm available immediately - no 2-3 month notice period delaying your Play Points initiatives. This arrangement lets me prove my value quickly while you evaluate cultural fit without long-term commitment. My track record shows I deliver the same quality regardless of employment type - ${contractorExample}. I'm genuinely interested in FTE conversion as Google Play's scale and AI/ML roadmap represent my ideal long-term opportunity. Think of it as an extended working interview where I can contribute immediately to your Q4 goals."**`;
             }
             else if (concerns.failure) {
                 approach = 'Show learning mindset + resilience + growth';
@@ -4913,7 +4921,9 @@ GROUP BY m.member_id, total_points, tier_min_points, tier_max_points, last_activ
                     'Proven optimization reducing processing 95%',
                     'Cost-conscious approach to large-scale analytics'
                 ];
-                strategy = `**"Scale is actually my comfort zone. I've processed 500M+ SKU records monthly at Home Depot and 100M+ daily transactions at Trulieve. I don't just handle large datasets - I optimize them, achieving 95% performance improvements reducing query time from 10 minutes to 30 seconds. I understand the cost implications of scanning billions of rows and consistently implement partitioning, clustering, and incremental processing strategies. For Play Points' 220M+ members and billions of daily events, I'd immediately apply these optimization patterns. There's no scale intimidation factor - I've been working at this magnitude for years."**`;
+                const scaleStory = loadedStories.find(s => s.title?.includes('BigQuery') || s.title?.includes('Scale') || s.result?.includes('records'));
+                const specificOptimization = scaleStory?.result?.match(/(\d+%[^,]*|10 minutes to 30 seconds|80% reduction)/g)?.join(', ') || '95% performance improvements reducing query time from 10 minutes to 30 seconds';
+                strategy = `**"Scale is actually my comfort zone. ${yourStrengths.scale}. I don't just handle large datasets - I optimize them, achieving ${specificOptimization}. I understand the cost implications of scanning billions of rows and consistently implement partitioning, clustering, and incremental processing strategies. For Play Points' 220M+ members and billions of daily events, I'd immediately apply these optimization patterns. There's no scale intimidation factor - I've been working at this magnitude for years."**`;
             }
             else if (concernCount === 0 || concernCount > 3) {
                 // Complex or vague question - provide structured framework
@@ -4925,7 +4935,10 @@ GROUP BY m.member_id, total_points, tier_min_points, tier_max_points, last_activ
                     'Show progression and growth',
                     'Demonstrate immediate value potential'
                 ];
-                strategy = `**"Let me address that comprehensively. [Situation] The question touches on important considerations for this role. [Task] My goal is to demonstrate not just capability, but exceptional fit for Play Points analytics. [Action] Looking at my background: I've managed Google-scale data (500M+ records), delivered quantified business impact ($3.2M retention improvement), and enabled 200+ stakeholders through intuitive analytics. Each of these directly applies to Play Points' challenges with 220M+ members. [Result] The outcome is clear: I can contribute immediately to your analytics needs while bringing fresh perspectives from cross-industry experience. The upcoming AI/ML integration particularly excites me as it combines my clustering expertise with Play Points' personalization goals."**`;
+                const comprehensiveExample = loadedStories.length > 0 ? loadedStories[0] : null;
+                const situationExample = comprehensiveExample ? comprehensiveExample.situation?.substring(0, 80) + '...' : 'similar challenges in previous roles';
+                const resultExample = comprehensiveExample ? comprehensiveExample.result : yourStrengths.impact;
+                strategy = `**"Let me address that comprehensively. [Situation] ${situationExample} - the question touches on important considerations for this role. [Task] My goal is to demonstrate not just capability, but exceptional fit for Play Points analytics. [Action] Looking at my background: I've managed Google-scale data (${yourStrengths.scale}), delivered quantified business impact (${resultExample}), and enabled stakeholders through intuitive analytics. Each of these directly applies to Play Points' challenges with 220M+ members. [Result] The outcome is clear: I can contribute immediately to your analytics needs while bringing fresh perspectives from cross-industry experience. The upcoming AI/ML integration particularly excites me as it combines my expertise with Play Points' personalization goals."**`;
             }
             else {
                 // Intelligent response based on question keywords
