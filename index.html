@@ -3673,9 +3673,9 @@ GROUP BY tier_level</code></pre>
             let questions = [];
             
             // Access the current app state to get loaded questions
-            if (window.appState && window.appState.questions && window.appState.questions.length > 0) {
+            if (window.appState && window.appState.extractedData && window.appState.extractedData.questions && window.appState.extractedData.questions.length > 0) {
                 // Filter questions by likely asker matching the panelist name
-                const panelistQuestions = window.appState.questions.filter(q => 
+                const panelistQuestions = window.appState.extractedData.questions.filter(q => 
                     q.likelyAsker && q.likelyAsker.toLowerCase().includes(panelistName.toLowerCase())
                 );
                 
