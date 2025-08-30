@@ -2167,7 +2167,9 @@ GROUP BY tier_level</code></pre>
                 'Ally': 'panel-ally',
                 'Skeptic': 'panel-skeptic',
                 'Gatekeeper': 'panel-gatekeeper',
-                'Technical Expert': 'panel-technical'
+                'Technical Expert': 'panel-technical',
+                'Technical Validator': 'panel-technical',
+                'Process Champion': 'panel-champion'
             };
             
             const archetypeBadgeColors = {
@@ -2175,7 +2177,9 @@ GROUP BY tier_level</code></pre>
                 'Ally': 'background: #3b82f6; color: white;',
                 'Skeptic': 'background: #f59e0b; color: white;',
                 'Gatekeeper': 'background: #64748b; color: white;',
-                'Technical Expert': 'background: #8b5cf6; color: white;'
+                'Technical Expert': 'background: #8b5cf6; color: white;',
+                'Technical Validator': 'background: #8b5cf6; color: white;',
+                'Process Champion': 'background: #22c55e; color: white;'
             };
             
             const defaults = {
@@ -2511,7 +2515,7 @@ GROUP BY tier_level</code></pre>
         // Function to load questions from Markdown file
         async function loadQuestionsFromMarkdown() {
             try {
-                console.log('🔍 Loading questions from google_play_interview_qa.md...');
+                console.log('🔍 Loading questions from Google Q&A Bank.md...');
                 const res = await fetch('input_files/Google Q&A Bank.md');
                 if (!res.ok) {
                     console.log('❌ Could not fetch Q&A file');
@@ -2524,6 +2528,7 @@ GROUP BY tier_level</code></pre>
                 let currentQuestion = '';
                 let currentAnswer = '';
                 let currentCategory = '';
+                let currentLikelyAsker = '';
                 let isInAnswer = false;
                 
                 for (let i = 0; i < lines.length; i++) {
@@ -2543,15 +2548,23 @@ GROUP BY tier_level</code></pre>
                             questions.push({
                                 question: currentQuestion.replace(/^[""]|[""]$/g, ''), // Remove quotes
                                 answer: currentAnswer.trim(),
-                                category: currentCategory || 'general'
+                                category: currentCategory || 'general',
+                                likelyAsker: currentLikelyAsker || 'Unknown'
                             });
                         }
                         
                         // Start new question
                         currentQuestion = line.replace(/^### Q\d+:\s*/, '').replace(/^[""]|[""]$/g, '');
                         currentAnswer = '';
+                        currentLikelyAsker = '';
                         isInAnswer = false;
                         console.log(`❓ Found question: ${currentQuestion.substring(0, 50)}...`);
+                    }
+                    
+                    // Detect likely asker lines like "*Likely Asker: Nikki Diman*"
+                    else if (line.match(/^\*Likely Asker:/)) {
+                        currentLikelyAsker = line.replace(/^\*Likely Asker:\s*/, '').replace(/\*$/, '').trim();
+                        console.log(`👤 Likely asker: ${currentLikelyAsker}`);
                     }
                     
                     // Detect answer sections - look for patterns like "**30-Second Core:**", "**60-Second Standard:**", etc.
@@ -2583,7 +2596,8 @@ GROUP BY tier_level</code></pre>
                     questions.push({
                         question: currentQuestion.replace(/^[""]|[""]$/g, ''),
                         answer: currentAnswer.trim(),
-                        category: currentCategory || 'general'
+                        category: currentCategory || 'general',
+                        likelyAsker: currentLikelyAsker || 'Unknown'
                     });
                 }
                 
@@ -3655,8 +3669,26 @@ GROUP BY tier_level</code></pre>
         async function generateAIPanelistQuestions(panelistName, panelistRole, panelistArchetype) {
             console.log(`🎯 Generating tailored questions for ${panelistName} (${panelistArchetype})`);
             
-            // Generate contextual questions based on specific panelist profiles
+            // First try to get questions from the loaded Q&A bank based on "Likely Asker" assignments
             let questions = [];
+            
+            // Access the current app state to get loaded questions
+            if (window.appState && window.appState.questions && window.appState.questions.length > 0) {
+                // Filter questions by likely asker matching the panelist name
+                const panelistQuestions = window.appState.questions.filter(q => 
+                    q.likelyAsker && q.likelyAsker.toLowerCase().includes(panelistName.toLowerCase())
+                );
+                
+                if (panelistQuestions.length > 0) {
+                    questions = panelistQuestions.map(q => q.question);
+                    console.log(`📋 Found ${questions.length} specific questions assigned to ${panelistName} from Q&A Bank`);
+                    return questions;
+                } else {
+                    console.log(`⚠️ No specific questions found for ${panelistName} in Q&A Bank, using fallback questions`);
+                }
+            }
+            
+            // Fallback to curated questions if no Q&A bank questions found
             
             if (panelistName === 'Nikki Diman') {
                 questions = [
