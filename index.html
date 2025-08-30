@@ -3653,27 +3653,52 @@ GROUP BY tier_level</code></pre>
 
         // Function to generate AI-powered questions for panelists based on all input files
         async function generateAIPanelistQuestions(panelistName, panelistRole, panelistArchetype) {
-            // Analyze all uploaded files to understand context
-            const allContent = Object.values(appState.fileContents).join('\n');
+            console.log(`🎯 Generating tailored questions for ${panelistName} (${panelistArchetype})`);
             
-            // Generate contextual questions based on panelist archetype and role
+            // Generate contextual questions based on specific panelist profiles
             let questions = [];
             
-            switch (panelistArchetype) {
-                case 'Champion':
-                    questions = [
-                        `Based on your experience with ${panelistRole}, tell me about a time you influenced stakeholders without formal authority.`,
-                        `How do you ensure data quality when multiple teams depend on your analysis?`,
-                        `Describe a situation where you had to manage competing priorities from different teams.`
-                    ];
-                    break;
-                case 'Technical Expert':
-                    questions = [
+            if (panelistName === 'Nikki Diman') {
+                questions = [
+                    'Tell me about a time you had to extract insights from minimal or messy data to solve a business problem.',
+                    'Describe a situation where you managed conflicting stakeholder requirements across different teams.',
+                    'How would you approach investigating a sudden 15% spike in Play Points member churn?',
+                    'Walk me through how you would present complex BigQuery analysis findings to non-technical executives.',
+                    'Give me an example of when you had to be creative in your problem-solving approach due to data limitations.'
+                ];
+            } else if (panelistName === 'Brian Mauch') {
+                questions = [
+                    'How would you optimize a BigQuery query that processes billions of Play Store transactions daily?',
+                    'Describe your experience with large-scale data architecture and pipeline design.',
+                    'Walk me through your approach to ensuring data quality in high-volume ETL processes.',
+                    'What strategies would you use to reduce query costs while maintaining performance at Google scale?',
+                    'Tell me about a time you had to troubleshoot performance issues in a data warehouse environment.'
+                ];
+            } else if (panelistName === 'Jolly Jayaprakash') {
+                questions = [
+                    'Are you available to start immediately and work Pacific Time hours when needed?',
+                    'How do you prioritize your work when supporting multiple stakeholders with urgent requests?',
+                    'What excites you most about working on Google Play Points analytics at this scale?',
+                    'Describe your experience working in fast-paced, collaborative environments.',
+                    'How do you ensure clear communication when working with distributed teams?'
+                ];
+            } else {
+                // Fallback based on archetype
+                switch (panelistArchetype) {
+                    case 'Gatekeeper':
+                        questions = [
+                            'Tell me about a time you influenced stakeholders without formal authority.',
+                            'How do you handle ambiguous requirements from multiple teams?',
+                            'Describe your approach to stakeholder management in cross-functional projects.'
+                        ];
+                        break;
+                    case 'Technical Validator':
+                        questions = [
                         `Walk me through your approach to statistical analysis in A/B testing.`,
                         `How do you validate data models and ensure statistical rigor?`,
                         `Describe a complex data problem you solved using advanced analytics.`
-                    ];
-                    break;
+                        ];
+                        break;
                 case 'Ally':
                     questions = [
                         `How do you handle ambiguity in project requirements?`,
@@ -3701,6 +3726,7 @@ GROUP BY tier_level</code></pre>
                         `What are the key challenges in this role?`,
                         `How do you measure success in data analytics?`
                     ];
+                }
             }
             
             // Add company-specific context if available
@@ -5780,7 +5806,7 @@ ${highlights.join('\n')}
         }
 
         function extractPanelistsFromQAFile(content) {
-            console.log('📖 Extracting enhanced panelist info from Q&A file...');
+            console.log('📖 Extracting comprehensive panelist profiles from Q&A file...');
             const panelists = [];
             const lines = content.split(/\r?\n/);
             
@@ -5797,16 +5823,55 @@ ${highlights.join('\n')}
                         panelists.push(currentPanelist);
                     }
                     
+                    const rawName = panelistMatch[1].trim();
+                    const rawRole = panelistMatch[2].trim();
+                    
+                    // Normalize names to proper capitalization
+                    let name = rawName;
+                    let archetype = 'Champion';
+                    
+                    if (rawName.includes('NIKKI DIMAN')) {
+                        name = 'Nikki Diman';
+                        archetype = 'Gatekeeper';
+                    } else if (rawName.includes('BRIAN MAUCH')) {
+                        name = 'Brian Mauch'; 
+                        archetype = 'Technical Validator';
+                    } else if (rawName.includes('JOLLY JAYAPRAKASH')) {
+                        name = 'Jolly Jayaprakash';
+                        archetype = 'Process Champion';
+                    }
+                    
                     currentPanelist = {
-                        name: panelistMatch[1].trim(),
-                        role: panelistMatch[2].trim(),
+                        name: name,
+                        role: rawRole,
+                        archetype: archetype,
                         hotButtons: '',
                         background: '',
                         likelyQuestions: '',
-                        responseStyle: ''
+                        responseStyle: '',
+                        motivation: '',
+                        anxiety: '',
+                        interviewStyle: '',
+                        questions: []
                     };
+                    
+                    // Set motivation and anxiety based on profiles
+                    if (name === 'Nikki Diman') {
+                        currentPanelist.motivation = 'Assessing cross-functional collaboration skills and creative problem-solving with minimal data';
+                        currentPanelist.anxiety = 'Generic answers without showing thought process or stakeholder awareness';
+                        currentPanelist.interviewStyle = 'Scenario-based problems with business context emphasis';
+                    } else if (name === 'Brian Mauch') {
+                        currentPanelist.motivation = 'Validating technical depth and scalability experience for Google-scale challenges';
+                        currentPanelist.anxiety = 'Lack of concrete technical experience or optimization strategies';
+                        currentPanelist.interviewStyle = 'Technical validation with architecture focus';
+                    } else if (name === 'Jolly Jayaprakash') {
+                        currentPanelist.motivation = 'Ensuring candidate availability and cultural fit for Google pace';
+                        currentPanelist.anxiety = 'Scheduling conflicts or lack of role enthusiasm';
+                        currentPanelist.interviewStyle = 'Logistics and availability focused';
+                    }
+                    
                     isInPanelistSection = true;
-                    console.log(`👤 Found enhanced info for: ${currentPanelist.name}`);
+                    console.log(`👤 Found comprehensive profile for: ${currentPanelist.name} (${currentPanelist.archetype})`);
                     continue;
                 }
                 
@@ -5818,6 +5883,8 @@ ${highlights.join('\n')}
                         currentPanelist.background = line.replace(/^\*\*Background:\*\*\s*/, '');
                     } else if (line.startsWith('**Likely Questions:**')) {
                         currentPanelist.likelyQuestions = line.replace(/^\*\*Likely Questions:\*\*\s*/, '');
+                        // Convert to array for questions
+                        currentPanelist.questions = currentPanelist.likelyQuestions.split(',').map(q => q.trim()).filter(q => q);
                     } else if (line.startsWith('**Response Style Needed:**')) {
                         currentPanelist.responseStyle = line.replace(/^\*\*Response Style Needed:\*\*\s*/, '');
                     } else if (line.startsWith('### ') || line.startsWith('## ')) {
