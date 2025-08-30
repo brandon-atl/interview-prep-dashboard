@@ -2543,14 +2543,15 @@ GROUP BY tier_level</code></pre>
                     
                     // Detect questions like "### Q1: "How would you design a data mart for Google Play Points tier progression analytics?""
                     if (line.match(/^### Q\d+:/)) {
-                        // Save previous question if exists
-                        if (currentQuestion && currentAnswer) {
+                        // Save previous question if exists (relaxed requirement - question is enough)
+                        if (currentQuestion) {
                             questions.push({
                                 question: currentQuestion.replace(/^[""]|[""]$/g, ''), // Remove quotes
-                                answer: currentAnswer.trim(),
+                                answer: currentAnswer.trim() || 'Review prep notes and Q&A content',
                                 category: currentCategory || 'general',
                                 likelyAsker: currentLikelyAsker || 'Unknown'
                             });
+                            console.log(`✅ Saved question: ${currentQuestion.substring(0, 30)}... (Asker: ${currentLikelyAsker})`);
                         }
                         
                         // Start new question
@@ -2592,13 +2593,14 @@ GROUP BY tier_level</code></pre>
                 }
                 
                 // Don't forget the last question
-                if (currentQuestion && currentAnswer) {
+                if (currentQuestion) {
                     questions.push({
                         question: currentQuestion.replace(/^[""]|[""]$/g, ''),
-                        answer: currentAnswer.trim(),
+                        answer: currentAnswer.trim() || 'Review prep notes and Q&A content',
                         category: currentCategory || 'general',
                         likelyAsker: currentLikelyAsker || 'Unknown'
                     });
+                    console.log(`✅ Saved final question: ${currentQuestion.substring(0, 30)}... (Asker: ${currentLikelyAsker})`);
                 }
                 
                 console.log(`✅ Extracted ${questions.length} questions from Q&A file`);
