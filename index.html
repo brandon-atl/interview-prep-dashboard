@@ -2369,6 +2369,21 @@ GROUP BY tier_level</code></pre>
             `).join('');
         }
 
+        // Simple function to convert basic markdown to HTML
+        function convertMarkdownToHtml(text) {
+            if (!text) return text;
+            return text
+                .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')  // **bold** -> <strong>bold</strong>
+                .replace(/\*(.*?)\*/g, '<em>$1</em>')              // *italic* -> <em>italic</em>
+                .replace(/#{6}\s*(.*)/g, '<h6>$1</h6>')            // ###### -> h6
+                .replace(/#{5}\s*(.*)/g, '<h5>$1</h5>')            // ##### -> h5
+                .replace(/#{4}\s*(.*)/g, '<h4>$1</h4>')            // #### -> h4
+                .replace(/#{3}\s*(.*)/g, '<h3>$1</h3>')            // ### -> h3
+                .replace(/#{2}\s*(.*)/g, '<h2>$1</h2>')            // ## -> h2
+                .replace(/#{1}\s*(.*)/g, '<h1>$1</h1>')            // # -> h1
+                .replace(/\n/g, '<br>');                           // newlines -> <br>
+        }
+
         function showStoryDetail(index) {
             const story = appState.extractedData.stories[index];
             const detailDiv = document.getElementById('storyDetail');
@@ -2377,16 +2392,16 @@ GROUP BY tier_level</code></pre>
                 <h3 style="font-weight: 600; margin-bottom: 1rem;">${story.title}</h3>
                 ${story.fromDocument ? '<span style="display: inline-block; padding: 0.125rem 0.5rem; background: #22c55e; color: white; border-radius: 9999px; font-size: 0.625rem; margin-bottom: 1rem;">FROM DOCUMENTS</span>' : ''}
                 <div style="background: #f8fafc; padding: 1rem; border-radius: 0.5rem; margin-bottom: 1rem;">
-                    <strong>Situation:</strong> ${story.situation}
+                    <strong>Situation:</strong> ${convertMarkdownToHtml(story.situation)}
                 </div>
                 <div style="background: #f8fafc; padding: 1rem; border-radius: 0.5rem; margin-bottom: 1rem;">
-                    <strong>Task:</strong> ${story.task}
+                    <strong>Task:</strong> ${convertMarkdownToHtml(story.task)}
                 </div>
                 <div style="background: #f8fafc; padding: 1rem; border-radius: 0.5rem; margin-bottom: 1rem;">
-                    <strong>Action:</strong> ${story.action}
+                    <strong>Action:</strong> ${convertMarkdownToHtml(story.action)}
                 </div>
                 <div style="background: #e0f2fe; padding: 1rem; border-radius: 0.5rem; border-left: 4px solid #0284c7;">
-                    <strong>Result:</strong> ${story.result}
+                    <strong>Result:</strong> ${convertMarkdownToHtml(story.result)}
                 </div>
                 ${story.additionalMetrics ? `
                     <div style="background: linear-gradient(135deg, #22c55e 0%, #16a34a 100%); color: white; padding: 1rem; border-radius: 0.5rem; margin-top: 1rem;">
@@ -4191,7 +4206,9 @@ GROUP BY tier_level</code></pre>
             const hasRealContent = culturalDiv.innerHTML.trim() && 
                                  !culturalDiv.innerHTML.includes('How to Demonstrate Cultural Fit') &&
                                  !culturalDiv.innerHTML.includes('Use data in every answer') &&
-                                 culturalDiv.innerHTML.length > 100;
+                                 !culturalDiv.innerHTML.includes('Cultural analysis will be populated here') &&
+                                 culturalDiv.innerHTML.length > 100 &&
+                                 culturalDiv.innerHTML.includes('Google Play Cultural Intelligence');
             
             if (hasRealContent) {
                 // Don't overwrite existing cultural analysis data
