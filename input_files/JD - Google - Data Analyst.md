@@ -11,6 +11,8 @@
 
 -   Brian Mauch (Optional) - <brian.mauch@scalence.com>
 
+-   Jolly Jayaprakash (Recruiter) - <jolly.jayaprakash@scalence.com>
+
 **PROJECT SUMMARY:**
 
 Client provides apps, games, and digital content services that bring
