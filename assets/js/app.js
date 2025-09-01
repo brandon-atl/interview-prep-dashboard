@@ -1,0 +1,5102 @@
+        // Application State
+        let appState = {
+            currentTab: 'upload',
+            uploadedFiles: [],
+            fileContents: {},
+            extractedData: {
+                company: '',
+                role: '',
+                metrics: [],
+                strengths: [],
+                gaps: [],
+                panelists: [],
+                panelistQuestions: {},
+                questions: [],
+                stories: [],
+                companyIntel: '',
+                culturalNotes: ''
+            }
+        };
+
+        // Initialize metrics immediately on page load
+        function initializeMetrics() {
+            console.log('Initializing metrics on page load');
+            const metricsContainer = document.getElementById('keyMetrics');
+            if (metricsContainer) {
+                const defaultMetrics = getDefaultMetrics();
+                const colors = ['#4f46e5', '#22c55e', '#f59e0b', '#8b5cf6', '#0ea5e9', '#ec4899', '#14b8a6'];
+                
+                metricsContainer.innerHTML = defaultMetrics.map((metric, index) => {
+                    const bgColor = `linear-gradient(135deg, ${colors[index % colors.length]} 0%, ${colors[(index + 1) % colors.length]} 100%)`;
+                    return `
+                        <div class="metric-tile" style="background: ${bgColor};">
+                            <div style="font-size: 2rem; font-weight: 700; margin-bottom: 0.5rem; z-index: 2;">${metric.value}</div>
+                            ${metric.growth ? `<div style="font-size: 0.875rem; opacity: 0.9; margin-bottom: 0.5rem; z-index: 2;">${metric.growth}</div>` : ''}
+                            <div style="font-size: 0.875rem; font-weight: 600; margin-bottom: 0.25rem; z-index: 2;">${metric.label}</div>
+                            ${metric.context ? `<div style="font-size: 0.75rem; opacity: 0.8; z-index: 2;">${metric.context}</div>` : ''}
+                        </div>
+                    `;
+                }).join('');
+                
+                console.log('Metrics initialized successfully');
+            } else {
+                console.error('Metrics container not found');
+            }
+        }
+
+        // Initialize
+        document.addEventListener('DOMContentLoaded', async function() {
+            setupEventListeners();
+            
+            // Initialize metrics immediately
+            setTimeout(initializeMetrics, 100);
+            
+            // Initialize countdown
+            initializeInterviewCountdown();
+            
+            // Try to load sample data automatically (single attempt)
+            console.log('🔄 Auto-loading sample data...');
+            try {
+                await loadSampleData();
+                console.log('✅ Sample data loaded successfully');
+            } catch (error) {
+                console.log('⚠️ Could not auto-load data:', error.message);
+                // Initialize with minimal state
+                appState.extractedData = {
+                    company: 'Google Play',
+                    role: 'BI Data Analyst', 
+                    questions: [],
+                    stories: [],
+                    panelists: [],
+                    metrics: getDefaultMetrics(),
+                    strengths: ['Advanced SQL & BigQuery optimization', 'Large-scale data processing'],
+                    gaps: ['Google Cloud Platform experience', 'Play Points domain knowledge'],
+                    companyIntel: 'Click "Load From input_files" to load your interview materials.',
+                    culturalNotes: 'Google Play cultural insights will load with your files.'
+                };
+                updateDashboard();
+                updateDataStatus('Dashboard ready. Click "Load From input_files" to load your materials.', 'info');
+            }
+            
+            if (window.pdfjsLib) {
+                try {
+                    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+                } catch (e) { /* ignore */ }
+            }
+            // Removed duplicate auto-load of sample data to avoid double work
+        });
+
+        async function initializeDashboard() {
+            // Don't auto-load sample data - let user choose to upload or load sample
+            updateDataStatus('Upload your materials to get started with personalized interview prep!', 'info');
+        }
+
+        function setupEventListeners() {
+            // Tab navigation
+            document.querySelectorAll('.tab-btn').forEach(btn => {
+                btn.addEventListener('click', function() {
+                    switchTab(this.dataset.tab);
+                });
+            });
+
+            // File upload
+            const fileDropZone = document.getElementById('fileDropZone');
+            const fileInput = document.getElementById('fileInput');
+            
+            if (fileDropZone && fileInput) {
+                fileDropZone.addEventListener('click', () => fileInput.click());
+                
+                fileDropZone.addEventListener('dragover', (e) => {
+                    e.preventDefault();
+                    fileDropZone.classList.add('dragover');
+                });
+                
+                fileDropZone.addEventListener('dragleave', () => {
+                    fileDropZone.classList.remove('dragover');
+                });
+                
+                fileDropZone.addEventListener('drop', (e) => {
+                    e.preventDefault();
+                    fileDropZone.classList.remove('dragover');
+                    handleFiles(e.dataTransfer.files);
+                });
+                
+                fileInput.addEventListener('change', (e) => {
+                    handleFiles(e.target.files);
+                });
+            }
+
+            // Search functionality
+            const searchInput = document.getElementById('questionSearch');
+            if (searchInput) {
+                searchInput.addEventListener('input', filterQuestions);
+            }
+            
+            const categorySelect = document.getElementById('questionCategory');
+            if (categorySelect) {
+                categorySelect.addEventListener('change', filterQuestions);
+            }
+        }
+
+        // Removed duplicate switchTab (see enhanced version near end of file)
+
+        function updateDataStatus(message, type = 'info') {
+            const statusDiv = document.getElementById('dataStatus');
+            if (statusDiv) {
+                const colors = {
+                    success: '#22c55e',
+                    error: '#ef4444',
+                    warning: '#f59e0b',
+                    info: '#64748b'
+                };
+                statusDiv.innerHTML = `<p style="color: ${colors[type]};">${message}</p>`;
+            }
+        }
+
+        // Small helper to render a consistent AI badge in templates
+        function aiBadge() {
+            return '<span class="ai-badge">AI</span>';
+        }
+
+        // Helpers to fetch text from .md/.docx/.pdf (and fallback)
+        async function fetchText(path) {
+            try {
+                if (path.endsWith('.md') || path.endsWith('.txt') || path.endsWith('.csv') || path.endsWith('.json')) {
+                    const res = await fetch(path);
+                    if (!res.ok) return '';
+                    return await res.text();
+                }
+                if (path.endsWith('.docx')) {
+                    const res = await fetch(path);
+                    if (!res.ok) return '';
+                    const buf = await res.arrayBuffer();
+                    if (window.mammoth && mammoth.extractRawText) {
+                        const { value } = await mammoth.extractRawText({ arrayBuffer: buf });
+                        return value || '';
+                    }
+                    return '';
+                }
+                if (path.endsWith('.pdf') && window.pdfjsLib) {
+                    const doc = await pdfjsLib.getDocument(path).promise;
+                    let text = '';
+                    for (let i = 1; i <= doc.numPages; i++) {
+                        const page = await doc.getPage(i);
+                        const content = await page.getTextContent();
+                        text += '\n' + content.items.map(it => it.str).join(' ');
+                    }
+                    return text;
+                }
+                const res = await fetch(path);
+                if (res.ok) return await res.text();
+            } catch (e) { /* ignore */ }
+            return '';
+        }
+
+        async function fetchTextForCandidates(paths) {
+            let joined = '';
+            for (const p of paths) {
+                const t = await fetchText(p);
+                if (t) joined += '\n' + t;
+            }
+            return { text: joined.trim() };
+        }
+
+        function handleFiles(files) {
+            const fileList = document.getElementById('fileList');
+            fileList.innerHTML = '<p style="font-weight: 500; margin-bottom: 0.5rem;">Selected Files:</p>';
+            
+            appState.uploadedFiles = Array.from(files);
+            
+            appState.uploadedFiles.forEach(file => {
+                const fileItem = document.createElement('div');
+                fileItem.style.cssText = 'padding: 0.5rem; background: #f8fafc; border-radius: 0.25rem; margin-bottom: 0.5rem; display: flex; justify-content: space-between; align-items: center;';
+                
+                const fileInfo = document.createElement('span');
+                fileInfo.textContent = `📄 ${file.name} (${(file.size / 1024).toFixed(1)}KB)`;
+                
+                fileItem.appendChild(fileInfo);
+                fileList.appendChild(fileItem);
+            });
+        }
+
+        async function readFileContent(file) {
+            return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload = (e) => resolve(e.target.result);
+                reader.onerror = reject;
+                reader.readAsText(file);
+            });
+        }
+
+        async function processFiles() {
+            const processBtn = document.querySelector('#processBtnText');
+            if (processBtn) {
+                processBtn.textContent = 'Processing...';
+            }
+            
+            showToast('Processing files...', 'info');
+            
+            try {
+                for (const file of appState.uploadedFiles) {
+                    const content = await readFileContent(file);
+                    appState.fileContents[file.name] = content;
+                    
+                    // Check if this is a CSV file with questions
+                    if (file.name.toLowerCase().includes('questions') && file.name.endsWith('.csv')) {
+                        // Parse CSV for questions
+                        const results = Papa.parse(content, {
+                            header: true,
+                            skipEmptyLines: true
+                        });
+                        
+                        // Process questions from CSV
+                        const csvQuestions = results.data.map(row => {
+                            const question = row['Question'] || '';
+                            const prepNotes = row['My Prep Notes (test, STAR link, follow-ups)'] || '';
+                            
+                            let category = 'behavioral';
+                            if (question.includes('[Technical]')) {
+                                category = 'technical';
+                            } else if (question.includes('[Behavioral]')) {
+                                category = 'behavioral';
+                            } else if (question.includes('[Situational]')) {
+                                category = 'situational';
+                            }
+                            
+                            const cleanQuestion = question
+                                .replace(/\[.*?\]\s*/, '')
+                                .trim();
+                            
+                            const answer = prepNotes
+                                .replace(/Tests:/, 'Focus:')
+                                .replace(/STAR:/, 'Use STAR:')
+                                .replace(/Follow-ups:/, 'Prepare for:')
+                                .trim();
+                            
+                            return {
+                                question: cleanQuestion,
+                                answer: answer || 'Review prep notes and STAR examples',
+                                category: category,
+                                fromCSV: true
+                            };
+                        }).filter(q => q.question);
+                        
+                        if (csvQuestions.length > 0) {
+                            appState.extractedData.questions = csvQuestions;
+                        }
+                    }
+                }
+                
+                extractDataFromFiles();
+                updateDashboard();
+
+                updateDataStatus('Files processed successfully!', 'success');
+                showToast('Files processed successfully!', 'success');
+                switchTab('command');
+
+            } catch (error) {
+                console.error('Error processing files:', error);
+                updateDataStatus('Error processing files. Loading sample data instead.', 'warning');
+                await loadSampleData();
+            } finally {
+                if (processBtn) {
+                    processBtn.textContent = 'Process Files';
+                }
+            }
+        }
+
+        function extractDataFromFiles() {
+            // Enhanced extraction logic
+            const combinedContent = Object.values(appState.fileContents).join('\n');
+            
+            // Extract company and role from Strategic Intelligence or other docs
+            const googlePlayMatch = combinedContent.match(/Google Play (?:BI\/)?(?:Data )?Analyst/i);
+            const roleMatch = combinedContent.match(/(?:Role|Position|Title):\s*([^\n]+)/i) || 
+                             combinedContent.match(/BI\/Data Analyst[^\n]*/i);
+            
+            if (googlePlayMatch) {
+                appState.extractedData.company = 'Google';
+                appState.extractedData.role = googlePlayMatch[0];
+            } else {
+                const companyMatch = combinedContent.match(/(?:company|employer):\s*([^\n]+)/i);
+                if (companyMatch) {
+                    appState.extractedData.company = companyMatch[1].trim();
+                }
+                if (roleMatch) {
+                    appState.extractedData.role = roleMatch[1].trim();
+                }
+            }
+            
+            // Extract interviewer information from Strategic Intelligence docs
+            extractInterviewerInfo(combinedContent);
+            
+            // Extract additional panelist data from structured Q&A document
+            extractPanelistDetailsFromQA(combinedContent);
+            
+            // Extract STAR stories from documents
+            extractSTARStories(combinedContent);
+            
+            // Extract key metrics
+            extractKeyMetrics(combinedContent);
+            
+            // Extract strengths and gaps
+            extractStrengthsAndGaps(combinedContent);
+            
+            // Set defaults if not found
+            if (!appState.extractedData.company) {
+                appState.extractedData.company = 'Google';
+            }
+            if (!appState.extractedData.role) {
+                appState.extractedData.role = 'BI/Data Analyst';
+            }
+            
+            // Extract questions from Q&A documents
+            extractQuestionsFromContent(combinedContent);
+            
+            // Extract company intelligence
+            extractCompanyIntel(combinedContent);
+            
+            // Preserve existing questions if they were already loaded from CSV
+            if (!appState.extractedData.questions || appState.extractedData.questions.length === 0) {
+                appState.extractedData.questions = [];
+            }
+        }
+
+        function updateDashboard() {
+            const data = appState.extractedData;
+            
+            // Update header
+            const titleElement = document.getElementById('dashboardTitle');
+            if (data.company && data.role) {
+                titleElement.textContent = `${data.company} | ${data.role} Interview Prep`;
+            } else {
+                titleElement.textContent = 'Master Interview Prep Dashboard';
+            }
+            
+            // Update all sections
+            updateCommandCenter();
+            updateCompanyIntel();
+            updatePanelStrategy();
+            updateQuestionBank();
+            updateStarStories();
+            updateDebriefDropdown();
+            
+            // Update data status
+            const statusMessage = `
+                ✅ Data loaded successfully!<br>
+                • Company: ${data.company}<br>
+                • Role: ${data.role}<br>
+                • Panelists: ${data.panelists.length}<br>
+                • Questions: ${data.questions.length}<br>
+                • Stories: ${data.stories.length}
+            `;
+            document.getElementById('dataStatus').innerHTML = statusMessage;
+        }
+
+        // Helper function for default metrics
+        function getDefaultMetrics() {
+            return [
+                { label: 'Play Points Members', value: '220M+', growth: 'Global', context: '' },
+                { label: 'Your Scale', value: '500M+', growth: 'Records', context: 'Home Depot' },
+                { label: 'Revenue Impact', value: '$3.2M', growth: '+12%', context: 'Retention' },
+                { label: 'Google Play Revenue', value: '$11.63B', growth: 'Q4 2024', context: '' },
+                { label: 'Efficiency Gain', value: '80%', growth: 'Automation', context: '' },
+                { label: 'Query Speed', value: '95%', growth: 'Faster', context: '10min→30sec' },
+                { label: 'Dashboard Adoption', value: '30%', growth: 'Increase', context: '200+ users' },
+                { label: 'Daily Processing', value: '100M+', growth: 'Records', context: 'Trulieve' }
+            ];
+        }
+
+        function updateCommandCenter() {
+            const data = appState.extractedData;
+            
+            // Update metrics with proper formatting
+            const metricsContainer = document.getElementById('keyMetrics');
+            if (metricsContainer) {
+                // Always use default metrics for consistent display
+                const metricsToShow = getDefaultMetrics();
+                
+                console.log('Updating metrics:', metricsToShow);
+                
+                const colors = ['#4f46e5', '#22c55e', '#f59e0b', '#8b5cf6', '#0ea5e9', '#ec4899', '#14b8a6'];
+                metricsContainer.innerHTML = metricsToShow.map((metric, index) => {
+                    const bgColor = `linear-gradient(135deg, ${colors[index % colors.length]} 0%, ${colors[(index + 1) % colors.length]} 100%)`;
+                    return `
+                        <div class="metric-tile" style="background: ${bgColor}; padding: 1.5rem; border-radius: 0.75rem; color: white; transition: all 0.3s ease; cursor: pointer; min-height: 140px; display: flex; flex-direction: column; justify-content: center; position: relative; overflow: hidden;">
+                            <div style="font-size: 2rem; font-weight: 700; margin-bottom: 0.5rem; z-index: 2;">${metric.value}</div>
+                            ${metric.growth ? `<div style="font-size: 0.875rem; opacity: 0.9; margin-bottom: 0.5rem; z-index: 2;">${metric.growth}</div>` : ''}
+                            <div style="font-size: 0.875rem; font-weight: 600; margin-bottom: 0.25rem; z-index: 2;">${metric.label}</div>
+                            ${metric.context ? `<div style="font-size: 0.75rem; opacity: 0.8; z-index: 2;">${metric.context}</div>` : ''}
+                        </div>
+                    `;
+                }).join('');
+            }
+            
+            // Update strengths
+            const strengthsList = document.getElementById('strengthsList');
+            if (strengthsList && data.strengths.length > 0) {
+                strengthsList.innerHTML = data.strengths.map(strength => 
+                    `<div class="strength-item">✓ ${strength}</div>`
+                ).join('');
+            }
+            
+            // Update gaps
+            const gapsList = document.getElementById('gapsList');
+            if (gapsList && data.gaps.length > 0) {
+                gapsList.innerHTML = data.gaps.map(gap => 
+                    `<div class="gap-item">→ ${gap}</div>`
+                ).join('');
+            }
+        }
+
+        function updateCompanyIntel() {
+            const data = appState.extractedData;
+
+            // Update Company Metrics Tiles - Strategic Context (non-overlapping with Command Center)
+            const metricsContainer = document.getElementById('companyMetrics');
+            if (metricsContainer) {
+                const companyMetrics = [
+                    { label: 'Market Dominance', value: '49%', growth: 'US Revenue', context: 'vs Apple Store' },
+                    { label: 'Global Downloads', value: '100B+', growth: 'Annual', context: 'Play Store' },
+                    { label: 'AI Investment', value: '$75B', growth: '2025 CapEx', context: 'Infrastructure' },
+                    { label: 'Regulatory Risk', value: '$205M', growth: 'Epic Settlement', context: 'Pending' },
+                    { label: 'Diamond Tier Launch', value: '2024', growth: 'New Program', context: 'Play Points' },
+                    { label: 'Gaming Revenue', value: '$31.3B', growth: '2022', context: 'vs Apple $50B' },
+                    { label: 'SQL Job Demand', value: '52.9%', growth: 'Of Postings', context: '2024 Market' },
+                    { label: 'Data Growth', value: '23%', growth: 'Through 2032', context: 'Analytics Jobs' }
+                ];
+                
+                const colors = ['#4f46e5', '#22c55e', '#f59e0b', '#8b5cf6', '#0ea5e9', '#ec4899', '#14b8a6', '#f97316'];
+                metricsContainer.innerHTML = companyMetrics.map((metric, index) => {
+                    const bgColor = `linear-gradient(135deg, ${colors[index % colors.length]} 0%, ${colors[(index + 1) % colors.length]} 100%)`;
+                    return `
+                        <div class="metric-tile" style="background: ${bgColor};">
+                            <div style="font-size: 2rem; font-weight: 700; margin-bottom: 0.5rem; z-index: 2; position: relative;">${metric.value}</div>
+                            ${metric.growth ? `<div style="font-size: 0.875rem; opacity: 0.9; margin-bottom: 0.5rem; z-index: 2; position: relative;">${metric.growth}</div>` : ''}
+                            <div style="font-size: 0.875rem; font-weight: 600; margin-bottom: 0.25rem; z-index: 2; position: relative;">${metric.label}</div>
+                            ${metric.context ? `<div style="font-size: 0.75rem; opacity: 0.8; z-index: 2; position: relative;">${metric.context}</div>` : ''}
+                        </div>
+                    `;
+                }).join('');
+            }
+
+            const briefingDiv = document.getElementById('companyBriefing');
+            if (briefingDiv) {
+                let intel;
+                try {
+                    intel = typeof data.companyIntel === 'string' ? JSON.parse(data.companyIntel) : data.companyIntel;
+                } catch (e) {
+                    intel = null;
+                }
+                
+                if (intel && intel.executiveBrief) {
+                    let briefingHTML = `
+                        <div style="background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%); color: white; padding: 1.5rem; border-radius: 0.75rem; margin-bottom: 1.5rem;">
+                            <h3 style="color: white; margin-bottom: 1rem; font-size: 1.25rem;">🎯 Executive Brief</h3>
+                            <div style="display: grid; gap: 0.75rem;">
+                                <div><strong>Q4 Performance:</strong> ${intel.executiveBrief.q4Performance}</div>
+                                <div><strong>Play Points Scale:</strong> ${intel.executiveBrief.playPointsScale}</div>
+                                <div><strong>Market Position:</strong> ${intel.executiveBrief.marketPosition}</div>
+                                <div><strong>Financial Strength:</strong> ${intel.executiveBrief.financialStrength}</div>
+                                <div><strong>AI Investment:</strong> ${intel.executiveBrief.aiInvestment}</div>
+                            </div>
+                        </div>
+                    `;
+
+                    // Business Performance Section
+                    briefingHTML += '<div style="margin-bottom: 2rem;">';
+                    briefingHTML += '<h4 style="color: #4f46e5; margin-bottom: 1rem; font-size: 1.1rem; font-weight: 600;">📊 Business Performance</h4>';
+                    
+                    // Revenue breakdown
+                    briefingHTML += '<div style="background: #f8fafc; padding: 1rem; border-radius: 0.5rem; margin-bottom: 1rem;">';
+                    briefingHTML += '<h5 style="margin-bottom: 0.75rem; font-weight: 600;">Revenue Breakdown (Q4 2024)</h5>';
+                    briefingHTML += '<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 0.5rem;">';
+                    for (const [key, value] of Object.entries(intel.businessPerformance.revenue)) {
+                        briefingHTML += `<div style="padding: 0.5rem; background: white; border-radius: 0.25rem; border-left: 3px solid #4f46e5;"><strong>${key}:</strong> ${value}</div>`;
+                    }
+                    briefingHTML += '</div></div>';
+
+                    // Key metrics
+                    briefingHTML += '<div style="background: #f0fdf4; padding: 1rem; border-radius: 0.5rem;">';
+                    briefingHTML += '<h5 style="margin-bottom: 0.75rem; font-weight: 600;">Key Metrics</h5>';
+                    briefingHTML += '<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 0.5rem;">';
+                    for (const [key, value] of Object.entries(intel.businessPerformance.keyMetrics)) {
+                        briefingHTML += `<div style="padding: 0.5rem; background: white; border-radius: 0.25rem; border-left: 3px solid #22c55e;"><strong>${key}:</strong> ${value}</div>`;
+                    }
+                    briefingHTML += '</div></div>';
+                    briefingHTML += '</div>';
+
+                    // Strategic Initiatives Section
+                    briefingHTML += '<div style="margin-bottom: 2rem;">';
+                    briefingHTML += '<h4 style="color: #4f46e5; margin-bottom: 1rem; font-size: 1.1rem; font-weight: 600;">🚀 Strategic Initiatives</h4>';
+                    
+                    const initiatives = [
+                        { title: 'AI/ML Integration', items: intel.strategicInitiatives.aiMlIntegration, color: '#8b5cf6' },
+                        { title: 'Play Store Platform', items: intel.strategicInitiatives.playStorePlatform, color: '#0ea5e9' },
+                        { title: 'Data Modernization', items: intel.strategicInitiatives.dataModernization, color: '#22c55e' }
+                    ];
+
+                    initiatives.forEach(({ title, items, color }) => {
+                        briefingHTML += `<div style="background: #f8fafc; padding: 1rem; border-radius: 0.5rem; margin-bottom: 1rem; border-left: 4px solid ${color};">`;
+                        briefingHTML += `<h6 style="margin-bottom: 0.75rem; font-weight: 600; color: ${color};">${title}</h6>`;
+                        briefingHTML += '<ul style="margin: 0; padding-left: 1rem;">';
+                        items.forEach(item => briefingHTML += `<li style="margin-bottom: 0.25rem;">${item}</li>`);
+                        briefingHTML += '</ul></div>';
+                    });
+                    briefingHTML += '</div>';
+
+                    // Challenges & Opportunities
+                    briefingHTML += '<div style="margin-bottom: 2rem;">';
+                    briefingHTML += '<h4 style="color: #4f46e5; margin-bottom: 1rem; font-size: 1.1rem; font-weight: 600;">⚖️ Challenges & Opportunities</h4>';
+                    
+                    const challenges = [
+                        { title: 'Regulatory Challenges', items: intel.challengesOpportunities.regulatory, color: '#f59e0b' },
+                        { title: 'Competitive Landscape', items: intel.challengesOpportunities.competitive, color: '#ef4444' },
+                        { title: 'Growth Opportunities', items: intel.challengesOpportunities.opportunities, color: '#22c55e' }
+                    ];
+
+                    challenges.forEach(({ title, items, color }) => {
+                        briefingHTML += `<div style="background: #f8fafc; padding: 1rem; border-radius: 0.5rem; margin-bottom: 1rem; border-left: 4px solid ${color};">`;
+                        briefingHTML += `<h6 style="margin-bottom: 0.75rem; font-weight: 600; color: ${color};">${title}</h6>`;
+                        briefingHTML += '<ul style="margin: 0; padding-left: 1rem;">';
+                        items.forEach(item => briefingHTML += `<li style="margin-bottom: 0.25rem;">${item}</li>`);
+                        briefingHTML += '</ul></div>';
+                    });
+                    briefingHTML += '</div>';
+
+                    // Technology Ecosystem
+                    briefingHTML += '<div style="margin-bottom: 2rem;">';
+                    briefingHTML += '<h4 style="color: #4f46e5; margin-bottom: 1rem; font-size: 1.1rem; font-weight: 600;">⚙️ Technology Ecosystem</h4>';
+                    
+                    briefingHTML += '<div style="background: #f8fafc; padding: 1rem; border-radius: 0.5rem; margin-bottom: 1rem;">';
+                    briefingHTML += '<h6 style="margin-bottom: 0.75rem; font-weight: 600;">Core Technology Stack</h6>';
+                    briefingHTML += '<div style="display: grid; gap: 0.5rem;">';
+                    for (const [key, value] of Object.entries(intel.technologyEcosystem.coreStack)) {
+                        briefingHTML += `<div style="padding: 0.5rem; background: white; border-radius: 0.25rem; border-left: 3px solid #8b5cf6;"><strong>${key}:</strong> ${value}</div>`;
+                    }
+                    briefingHTML += '</div></div>';
+
+                    briefingHTML += '<div style="background: #f0fdf4; padding: 1rem; border-radius: 0.5rem;">';
+                    briefingHTML += '<h6 style="margin-bottom: 0.75rem; font-weight: 600;">Recent Advancements</h6>';
+                    briefingHTML += '<ul style="margin: 0; padding-left: 1rem;">';
+                    intel.technologyEcosystem.recentAdvancements.forEach(advancement => {
+                        briefingHTML += `<li style="margin-bottom: 0.25rem;">${advancement}</li>`;
+                    });
+                    briefingHTML += '</ul></div></div>';
+
+                    // Role-Specific Intelligence
+                    briefingHTML += '<div>';
+                    briefingHTML += '<h4 style="color: #4f46e5; margin-bottom: 1rem; font-size: 1.1rem; font-weight: 600;">👤 Role-Specific Intelligence</h4>';
+                    
+                    briefingHTML += `<div style="background: linear-gradient(135deg, #f0f9ff, #e0f2fe); padding: 1rem; border-radius: 0.5rem; border-left: 4px solid #0ea5e9; margin-bottom: 1rem;">`;
+                    briefingHTML += `<div style="margin-bottom: 0.5rem;"><strong>Department:</strong> ${intel.roleSpecificIntel.department}</div>`;
+                    briefingHTML += `<div style="margin-bottom: 0.5rem;"><strong>Focus:</strong> ${intel.roleSpecificIntel.focus}</div>`;
+                    briefingHTML += `<div><strong>Team Structure:</strong> ${intel.roleSpecificIntel.teamStructure}</div>`;
+                    briefingHTML += '</div>';
+
+                    briefingHTML += '<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">';
+                    
+                    briefingHTML += '<div style="background: #f8fafc; padding: 1rem; border-radius: 0.5rem;">';
+                    briefingHTML += '<h6 style="margin-bottom: 0.75rem; font-weight: 600;">Key Projects</h6>';
+                    briefingHTML += '<ul style="margin: 0; padding-left: 1rem; font-size: 0.875rem;">';
+                    intel.roleSpecificIntel.projects.forEach(project => {
+                        briefingHTML += `<li style="margin-bottom: 0.25rem;">${project}</li>`;
+                    });
+                    briefingHTML += '</ul></div>';
+
+                    briefingHTML += '<div style="background: #f8fafc; padding: 1rem; border-radius: 0.5rem;">';
+                    briefingHTML += '<h6 style="margin-bottom: 0.75rem; font-weight: 600;">Key Stakeholders</h6>';
+                    briefingHTML += '<ul style="margin: 0; padding-left: 1rem; font-size: 0.875rem;">';
+                    intel.roleSpecificIntel.keyStakeholders.forEach(stakeholder => {
+                        briefingHTML += `<li style="margin-bottom: 0.25rem;">${stakeholder}</li>`;
+                    });
+                    briefingHTML += '</ul></div>';
+                    
+                    briefingHTML += '</div></div>';
+                    
+                    briefingDiv.innerHTML = briefingHTML;
+                } else if (data.companyIntel) {
+                    // Safely render markdown with sanitization when available
+                    if (window.DOMPurify && window.marked) {
+                        briefingDiv.innerHTML = DOMPurify.sanitize(marked.parse(data.companyIntel));
+                    } else if (window.marked) {
+                        briefingDiv.innerHTML = marked.parse(data.companyIntel);
+                    } else {
+                        // Fallback: plain text
+                        briefingDiv.textContent = data.companyIntel;
+                    }
+                }
+            }
+
+            const culturalDiv = document.getElementById('culturalFit');
+            if (culturalDiv) {
+                let intel;
+                try {
+                    intel = typeof data.companyIntel === 'string' ? JSON.parse(data.companyIntel) : data.companyIntel;
+                } catch (e) {
+                    intel = null;
+                }
+                
+                if (intel && intel.cultureWorkplace) {
+                    let culturalHTML = '<div>';
+                    
+                    // Employee Satisfaction
+                    culturalHTML += '<h5 style="color: #22c55e; margin-bottom: 1rem; font-weight: 600;">📈 Employee Satisfaction</h5>';
+                    culturalHTML += '<div style="background: #f0fdf4; padding: 1rem; border-radius: 0.5rem; margin-bottom: 1.5rem;">';
+                    for (const [key, value] of Object.entries(intel.cultureWorkplace.satisfaction)) {
+                        culturalHTML += `<div style="margin-bottom: 0.5rem;"><strong>${key}:</strong> ${value}</div>`;
+                    }
+                    culturalHTML += '</div>';
+
+                    // Work Environment
+                    culturalHTML += '<h5 style="color: #3b82f6; margin-bottom: 1rem; font-weight: 600;">🏢 Work Environment</h5>';
+                    culturalHTML += '<div style="background: #eff6ff; padding: 1rem; border-radius: 0.5rem; margin-bottom: 1.5rem;">';
+                    culturalHTML += '<ul style="margin: 0; padding-left: 1rem;">';
+                    intel.cultureWorkplace.workEnvironment.forEach(item => {
+                        culturalHTML += `<li style="margin-bottom: 0.5rem;">${item}</li>`;
+                    });
+                    culturalHTML += '</ul></div>';
+
+                    // Benefits
+                    culturalHTML += '<h5 style="color: #8b5cf6; margin-bottom: 1rem; font-weight: 600;">💼 Benefits & Compensation</h5>';
+                    culturalHTML += '<div style="background: #f3e8ff; padding: 1rem; border-radius: 0.5rem;">';
+                    culturalHTML += '<ul style="margin: 0; padding-left: 1rem;">';
+                    intel.cultureWorkplace.benefits.forEach(benefit => {
+                        culturalHTML += `<li style="margin-bottom: 0.5rem;">${benefit}</li>`;
+                    });
+                    culturalHTML += '</ul></div>';
+                    
+                    culturalHTML += '</div>';
+                    culturalDiv.innerHTML = culturalHTML;
+                } else {
+                    // Fallback content
+                    let culturalHTML = '<p><strong>Signals to Convey:</strong></p><ul>';
+                    ['Data-first rigor and clarity', 'Collaboration and user-centricity', 'Technical depth with concise storytelling'].forEach(signal => {
+                        culturalHTML += `<li>${signal}</li>`;
+                    });
+                    culturalHTML += '</ul>';
+                    culturalDiv.innerHTML = culturalHTML;
+                }
+            }
+
+            // Update source tag when available
+            const sourceType = document.getElementById('sourceType');
+            if (sourceType) {
+                sourceType.textContent = data.companyIntelSource || 'Strategic Intelligence Analysis';
+            }
+        }
+
+        function updatePanelStrategy() {
+            const container = document.getElementById('panelistsContainer');
+            if (!container || appState.extractedData.panelists.length === 0) return;
+            
+            const archetypeColors = {
+                'Champion': 'panel-champion',
+                'Ally': 'panel-ally',
+                'Skeptic': 'panel-skeptic',
+                'Gatekeeper': 'panel-gatekeeper',
+                'Technical Expert': 'panel-technical',
+                'Technical Validator': 'panel-technical',
+                'Process Champion': 'panel-champion'
+            };
+            
+            const archetypeBadgeColors = {
+                'Champion': 'background: #22c55e; color: white;',
+                'Ally': 'background: #3b82f6; color: white;',
+                'Skeptic': 'background: #f59e0b; color: white;',
+                'Gatekeeper': 'background: #64748b; color: white;',
+                'Technical Expert': 'background: #8b5cf6; color: white;',
+                'Technical Validator': 'background: #8b5cf6; color: white;',
+                'Process Champion': 'background: #22c55e; color: white;'
+            };
+            
+            const defaults = {
+                motivation: {
+                    'Champion': 'Business impact and alignment',
+                    'Ally': 'Candidate experience and culture add',
+                    'Skeptic': 'Risk, trade-offs, and rigor',
+                    'Gatekeeper': 'Process, compliance, and fit',
+                    'Technical Expert': 'Technical depth and correctness'
+                },
+                anxiety: {
+                    'Champion': 'Execution risk and stakeholder buy-in',
+                    'Ally': 'Long-term retention and team fit',
+                    'Skeptic': 'Over-claims or shallow analysis',
+                    'Gatekeeper': 'Policy adherence and signal quality',
+                    'Technical Expert': 'Statistical rigor and scalability'
+                }
+            };
+
+            container.innerHTML = appState.extractedData.panelists.map(p => `
+                <div class="panel-card ${archetypeColors[p.archetype] || 'panel-ally'}">
+                    <div class="archetype-badge" style="${archetypeBadgeColors[p.archetype] || ''}">${p.archetype}</div>
+                    <h3 style="font-weight: 600; font-size: 1.125rem; margin-bottom: 0.25rem;">${p.name}</h3>
+                    <p style="color: #64748b; font-size: 0.875rem; margin-bottom: 1rem;">${p.role}</p>
+                    <div style="font-size: 0.875rem; margin-bottom: 0.5rem;">
+                        <strong>Motivation:</strong> ${p.motivation || defaults.motivation[p.archetype] || ''}
+                    </div>
+                    <div style="font-size: 0.875rem; margin-bottom: 1rem;">
+                        <strong>Anxiety:</strong> ${p.anxiety || defaults.anxiety[p.archetype] || ''}
+                    </div>
+                    ${p.talkingPoints ? `<div style="background:#f8fafc; border-radius:0.5rem; padding:0.75rem; margin-bottom:0.75rem;">
+                        <strong>Key Talking Points:</strong>
+                        <ul style="margin-top:0.5rem; list-style:disc; padding-left:1rem; font-size:0.85rem;">
+                            ${p.talkingPoints.map(tp => `<li>${tp}</li>`).join('')}
+                        </ul>
+                    </div>` : ''}
+                    <button class="btn btn-primary" style="width: 100%;" onclick="generatePanelistQuestion('${p.name.replace(/'/g, "\\'")}')">
+                        <span>✨</span> Generate a question
+                        <span class="ai-badge">AI</span>
+                    </button>
+                    <div id="question-${p.name.replace(/\s/g, '-')}" style="margin-top: 1rem;"></div>
+                </div>
+            `).join('');
+        }
+
+        function updateQuestionBank() {
+            // Do not inject defaults; only render what was extracted from files
+            updateQuestionList();
+        }
+
+        function updateQuestionList() {
+            const container = document.getElementById('questionList');
+            if (!container) return;
+            
+            const questions = appState.extractedData.questions;
+            const searchTerm = document.getElementById('questionSearch')?.value.toLowerCase() || '';
+            const category = document.getElementById('questionCategory')?.value || '';
+            
+            const filtered = questions.filter(q => {
+                const matchesSearch = !searchTerm || 
+                    q.question.toLowerCase().includes(searchTerm) || 
+                    (q.answer && q.answer.toLowerCase().includes(searchTerm));
+                const matchesCategory = !category || q.category === category;
+                return matchesSearch && matchesCategory;
+            });
+            
+            container.innerHTML = filtered.map(q => {
+                // Format the answer for better readability
+                let formattedAnswer = q.answer;
+                if (q.answer) {
+                    // Split by common delimiters and format
+                    formattedAnswer = q.answer
+                        .replace(/Focus:/g, '<strong>Focus:</strong>')
+                        .replace(/Use STAR:/g, '<br><strong>STAR Example:</strong>')
+                        .replace(/Prepare for:/g, '<br><strong>Follow-ups:</strong>')
+                        .replace(/•/g, '<br>•');
+                }
+
+                // Confidence level styling
+                const confidenceColor = q.confidence >= 90 ? '#22c55e' : q.confidence >= 80 ? '#f59e0b' : '#ef4444';
+                const confidenceText = q.confidence >= 90 ? 'HIGH' : q.confidence >= 80 ? 'MED' : 'LOW';
+                
+                return `
+                    <div class="question-item" style="background: white; border-radius: 0.75rem; padding: 1.25rem; margin-bottom: 1rem; box-shadow: 0 1px 3px rgba(0,0,0,0.1); border: 1px solid #e2e8f0; transition: all 0.3s ease; cursor: pointer;" 
+                         onclick="toggleQuestionDetail(${filtered.indexOf(q)})" 
+                         onmouseover="this.style.boxShadow='0 4px 12px rgba(0,0,0,0.15)'; this.style.transform='translateY(-2px)'" 
+                         onmouseout="this.style.boxShadow='0 1px 3px rgba(0,0,0,0.1)'; this.style.transform='translateY(0)'">
+                        
+                        <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 1rem;">
+                            <div style="flex: 1;">
+                                <div style="margin-bottom: 0.75rem; display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;">
+                                    <span style="display: inline-block; padding: 0.25rem 0.75rem; background: ${getCategoryColor(q.category)}; color: white; border-radius: 1rem; font-size: 0.75rem; font-weight: 600;">
+                                        ${q.category.toUpperCase()}
+                                    </span>
+                                    ${q.difficulty ? `<span style="display: inline-block; padding: 0.25rem 0.75rem; background: #8b5cf6; color: white; border-radius: 1rem; font-size: 0.75rem; font-weight: 600;">${q.difficulty}</span>` : ''}
+                                    ${q.confidence ? `<span style="display: inline-block; padding: 0.25rem 0.75rem; background: ${confidenceColor}; color: white; border-radius: 1rem; font-size: 0.75rem; font-weight: 600;">${confidenceText} ${q.confidence}%</span>` : ''}
+                                    ${q.source ? `<span style="display: inline-block; padding: 0.125rem 0.5rem; background: #22c55e; color: white; border-radius: 9999px; font-size: 0.625rem;">FROM ${q.source.toUpperCase()}</span>` : ''}
+                                    ${q.fromCSV ? '<span style="display: inline-block; padding: 0.125rem 0.5rem; background: #22c55e; color: white; border-radius: 9999px; font-size: 0.625rem;">Q&A BANK</span>' : ''}
+                                    ${q.aiGenerated ? '<span class="ai-badge">AI</span>' : ''}
+                                    ${q.interviewRound ? `<span style="display: inline-block; padding: 0.125rem 0.5rem; background: #f59e0b; color: white; border-radius: 9999px; font-size: 0.625rem;">${q.interviewRound}</span>` : ''}
+                                </div>
+                                
+                                <div style="display: flex; align-items: start; gap: 1rem;">
+                                    <div style="flex: 1;">
+                                        <h3 style="font-weight: 600; margin-bottom: 0.5rem; color: #1e293b; font-size: 1.1rem; line-height: 1.4;">${q.question}</h3>
+                                    </div>
+                                    <div style="color: #9ca3af; font-size: 1.2rem; transition: transform 0.3s ease;" id="chevron-${filtered.indexOf(q)}">▶</div>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div id="question-detail-${filtered.indexOf(q)}" style="display: none; margin-top: 1rem; padding-top: 1rem; border-top: 1px solid #e5e7eb;">
+                            ${q.prepNotes ? `<div style="background: linear-gradient(135deg, #fef3c7, #fde68a); padding: 0.75rem; border-radius: 0.5rem; margin-bottom: 1rem; border-left: 4px solid #f59e0b;">
+                                <strong style="color: #92400e;">💡 What This Tests:</strong>
+                                <div style="margin-top: 0.5rem; color: #78350f;">${q.prepNotes}</div>
+                            </div>` : ''}
+                            
+                            ${q.starLink ? `<div style="background: linear-gradient(135deg, #dbeafe, #bfdbfe); padding: 0.75rem; border-radius: 0.5rem; margin-bottom: 1rem; border-left: 4px solid #3b82f6;">
+                                <strong style="color: #1d4ed8;">⭐ Recommended STAR Story:</strong>
+                                <div style="margin-top: 0.5rem; color: #1e40af; font-weight: 500;">${q.starLink}</div>
+                            </div>` : ''}
+                            
+                            ${q.followUps ? `<div style="background: linear-gradient(135deg, #f3e8ff, #e9d5ff); padding: 0.75rem; border-radius: 0.5rem; margin-bottom: 1rem; border-left: 4px solid #8b5cf6;">
+                                <strong style="color: #6b21a8;">🔄 Potential Follow-ups:</strong>
+                                <div style="margin-top: 0.5rem; color: #7c2d92;">${q.followUps}</div>
+                            </div>` : ''}
+
+                            <div style="background: linear-gradient(135deg, #f8fafc, #f1f5f9); padding: 1rem; border-radius: 0.5rem; border-left: 4px solid ${getCategoryColor(q.category)};">
+                                <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.75rem;">
+                                    <span style="font-size: 1.2rem;">💡</span>
+                                    <strong style="color: #374151;">Preparation Notes:</strong>
+                                </div>
+                                <div style="color: #4b5563; line-height: 1.6;">${formattedAnswer || 'No preparation notes available. Consider adding specific talking points and examples.'}</div>
+                            </div>
+                            
+                            <div style="display: flex; gap: 0.5rem; margin-top: 1rem;">
+                                <button class="btn btn-sm" style="background: #10b981; color: white; padding: 0.5rem 1rem; border: none; border-radius: 0.375rem; font-size: 0.875rem; cursor: pointer;" 
+                                        onclick="markPracticed(${filtered.indexOf(q)}); event.stopPropagation();">
+                                    ✅ Mark as Practiced
+                                </button>
+                                <button class="btn btn-sm" style="background: #f59e0b; color: white; padding: 0.5rem 1rem; border: none; border-radius: 0.375rem; font-size: 0.875rem; cursor: pointer;" 
+                                        onclick="addToReview(${filtered.indexOf(q)}); event.stopPropagation();">
+                                    📌 Add to Review
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+            
+            if (filtered.length === 0) {
+                container.innerHTML = '<p style="padding: 1rem; color: #64748b;">No questions found. Try adjusting your search or generate more questions.</p>';
+            }
+        }
+
+        // Removed duplicate getCategoryColor (see consolidated version below)
+
+        function updateStarStories() {
+            const container = document.getElementById('storyList');
+            if (!container) return;
+            
+            if (appState.extractedData.stories.length === 0) {
+                container.innerHTML = '<p style="color: #64748b;">No stories loaded yet. Upload files or load sample data.</p>';
+                return;
+            }
+            
+            container.innerHTML = appState.extractedData.stories.map((story, index) => `
+                <div style="padding: 1rem; background: #f8fafc; border-radius: 0.5rem; margin-bottom: 1rem; cursor: pointer;" 
+                     onclick="showStoryDetail(${index})">
+                    <div style="display: flex; justify-content: space-between; align-items: start;">
+                        <div style="flex: 1;">
+                            <h4 style="font-weight: 600;">${story.title}</h4>
+                            <p style="font-size: 0.875rem; color: #64748b;">Problem: ${story.problem || 'Click to view'}</p>
+                            <p style="font-size: 0.875rem; color: #4f46e5; font-weight: 600;">Metric: ${story.metric || 'N/A'}</p>
+                            ${story.fromDocument ? '<span style="display: inline-block; padding: 0.125rem 0.5rem; background: #22c55e; color: white; border-radius: 9999px; font-size: 0.625rem; margin-top: 0.5rem;">FROM DOCUMENTS</span>' : ''}
+                        </div>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        // Simple function to convert basic markdown to HTML
+        function convertMarkdownToHtml(text) {
+            if (!text) return text;
+            return text
+                .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')  // **bold** -> <strong>bold</strong>
+                .replace(/\*(.*?)\*/g, '<em>$1</em>')              // *italic* -> <em>italic</em>
+                .replace(/#{6}\s*(.*)/g, '<h6>$1</h6>')            // ###### -> h6
+                .replace(/#{5}\s*(.*)/g, '<h5>$1</h5>')            // ##### -> h5
+                .replace(/#{4}\s*(.*)/g, '<h4>$1</h4>')            // #### -> h4
+                .replace(/#{3}\s*(.*)/g, '<h3>$1</h3>')            // ### -> h3
+                .replace(/#{2}\s*(.*)/g, '<h2>$1</h2>')            // ## -> h2
+                .replace(/#{1}\s*(.*)/g, '<h1>$1</h1>')            // # -> h1
+                .replace(/\n/g, '<br>');                           // newlines -> <br>
+        }
+
+        function showStoryDetail(index) {
+            const story = appState.extractedData.stories[index];
+            const detailDiv = document.getElementById('storyDetail');
+            
+            detailDiv.innerHTML = `
+                <h3 style="font-weight: 600; margin-bottom: 1rem;">${story.title}</h3>
+                ${story.fromDocument ? '<span style="display: inline-block; padding: 0.125rem 0.5rem; background: #22c55e; color: white; border-radius: 9999px; font-size: 0.625rem; margin-bottom: 1rem;">FROM DOCUMENTS</span>' : ''}
+                <div style="background: #f8fafc; padding: 1rem; border-radius: 0.5rem; margin-bottom: 1rem;">
+                    <strong>Situation:</strong> ${convertMarkdownToHtml(story.situation)}
+                </div>
+                <div style="background: #f8fafc; padding: 1rem; border-radius: 0.5rem; margin-bottom: 1rem;">
+                    <strong>Task:</strong> ${convertMarkdownToHtml(story.task)}
+                </div>
+                <div style="background: #f8fafc; padding: 1rem; border-radius: 0.5rem; margin-bottom: 1rem;">
+                    <strong>Action:</strong> ${convertMarkdownToHtml(story.action)}
+                </div>
+                <div style="background: #e0f2fe; padding: 1rem; border-radius: 0.5rem; border-left: 4px solid #0284c7;">
+                    <strong>Result:</strong> ${convertMarkdownToHtml(story.result)}
+                </div>
+                ${story.additionalMetrics ? `
+                    <div style="background: linear-gradient(135deg, #22c55e 0%, #16a34a 100%); color: white; padding: 1rem; border-radius: 0.5rem; margin-top: 1rem;">
+                        <strong>📊 Enhanced Metrics:</strong> ${story.additionalMetrics}
+                    </div>
+                ` : ''}
+                <button class="btn btn-primary" style="margin-top: 1rem;" onclick="enhanceStory(${index})">
+                    <span>✨</span> ${story.additionalMetrics ? 'Re-enhance' : 'Enhance this'} Story
+                    <span class="ai-badge">AI</span>
+                </button>
+            `;
+        }
+
+        function updateDebriefDropdown() {
+            const select = document.getElementById('interviewerSelect');
+            if (!select) return;
+            
+            if (appState.extractedData.panelists.length === 0) {
+                select.innerHTML = '<option value="">No panelists loaded</option>';
+            } else {
+                select.innerHTML = appState.extractedData.panelists.map(p => 
+                    `<option value="${p.name}">${p.name} - ${p.role}</option>`
+                ).join('');
+            }
+        }
+
+        function filterQuestions(category) {
+            if (category) {
+                document.getElementById('questionCategory').value = category;
+            }
+            updateQuestionList();
+        }
+
+        // Enhanced question display functions
+        function toggleQuestionDetail(questionId) {
+            const details = document.getElementById(`${questionId}-details`);
+            const toggle = document.getElementById(`${questionId}-toggle`);
+            
+            if (details && toggle) {
+                if (details.style.display === 'none') {
+                    details.style.display = 'block';
+                    toggle.textContent = '🔼 Hide Details';
+                } else {
+                    details.style.display = 'none';
+                    toggle.textContent = '📖 View Details';
+                }
+            }
+        }
+
+        function getCategoryColor(category) {
+            const colors = {
+                'technical': '#dc2626',
+                'behavioral': '#7c3aed', 
+                'situational': '#059669',
+                'company': '#0ea5e9',
+                'role-specific': '#f59e0b'
+            };
+            return colors[category] || '#64748b';
+        }
+
+        function getCategoryIcon(category) {
+            const icons = {
+                'technical': '🔧',
+                'behavioral': '👤',
+                'situational': '🎯',
+                'company': '🏢',
+                'role-specific': '📊'
+            };
+            return icons[category] || '❓';
+        }
+
+        // Function to load questions from CSV file
+        async function loadQuestionsFromCSV() {
+            try {
+                const response = await fetch('input_files/anticipated_questions_google_play_bi.csv');
+                const csvText = await response.text();
+                
+                // Parse CSV using Papa Parse
+                const results = Papa.parse(csvText, {
+                    header: true,
+                    skipEmptyLines: true
+                });
+                
+                // Transform CSV data to our question format
+                const questions = results.data.map(row => {
+                    const question = row['Question'] || '';
+                    const prepNotes = row['My Prep Notes (test, STAR link, follow-ups)'] || '';
+                    
+                    // Determine category from question prefix
+                    let category = 'behavioral';
+                    if (question.includes('[Technical]')) {
+                        category = 'technical';
+                    } else if (question.includes('[Behavioral]')) {
+                        category = 'behavioral';
+                    } else if (question.includes('[Situational]')) {
+                        category = 'situational';
+                    }
+                    
+                    // Clean up the question text
+                    const cleanQuestion = question
+                        .replace(/\[.*?\]\s*/, '') // Remove category prefix
+                        .trim();
+                    
+                    // Extract key points from prep notes
+                    const answer = prepNotes
+                        .replace(/Tests:/, 'Focus:')
+                        .replace(/STAR:/, 'Use STAR:')
+                        .replace(/Follow-ups:/, 'Prepare for:')
+                        .trim();
+                    
+                    return {
+                        question: cleanQuestion,
+                        answer: answer || 'Review prep notes and STAR examples',
+                        category: category,
+                        fromCSV: true
+                    };
+                }).filter(q => q.question); // Filter out any empty questions
+                
+                return questions;
+            } catch (error) {
+                console.error('Error loading CSV:', error);
+                return [];
+            }
+        }
+
+        // Function to load questions from Markdown file
+        async function loadQuestionsFromMarkdown() {
+            try {
+                console.log('🔍 Loading questions from Google Q&A Bank.md...');
+                const res = await fetch('input_files/Google Q&A Bank.md');
+                if (!res.ok) {
+                    console.log('❌ Could not fetch Q&A file');
+                    return [];
+                }
+                
+                const text = await res.text();
+                const lines = text.split(/\r?\n/);
+                const questions = [];
+                let currentQuestion = '';
+                let currentAnswer = '';
+                let currentCategory = '';
+                let currentLikelyAsker = '';
+                let isInAnswer = false;
+                
+                for (let i = 0; i < lines.length; i++) {
+                    const line = lines[i].trim();
+                    
+                    // Detect category sections like "## CATEGORY 1: ROLE-SPECIFIC TECHNICAL QUESTIONS"
+                    if (line.match(/^## .*CATEGORY \d+:/)) {
+                        currentCategory = line.replace(/^## .*CATEGORY \d+:\s*/, '').toLowerCase();
+                        console.log(`📂 Found category: ${currentCategory}`);
+                        continue;
+                    }
+                    
+                    // Detect questions like "### Q1: "How would you design a data mart for Google Play Points tier progression analytics?""
+                    if (line.match(/^### Q\d+:/)) {
+                        // Save previous question if exists (relaxed requirement - question is enough)
+                        if (currentQuestion) {
+                            questions.push({
+                                question: currentQuestion.replace(/^[""]|[""]$/g, ''), // Remove quotes
+                                answer: currentAnswer.trim() || 'Review prep notes and Q&A content',
+                                category: currentCategory || 'general',
+                                likelyAsker: currentLikelyAsker || 'Unknown'
+                            });
+                            console.log(`✅ Saved question: ${currentQuestion.substring(0, 30)}... (Asker: ${currentLikelyAsker})`);
+                        }
+                        
+                        // Start new question
+                        currentQuestion = line.replace(/^### Q\d+:\s*/, '').replace(/^[""]|[""]$/g, '');
+                        currentAnswer = '';
+                        currentLikelyAsker = '';
+                        isInAnswer = false;
+                        console.log(`❓ Found question: ${currentQuestion.substring(0, 50)}...`);
+                    }
+                    
+                    // Detect likely asker lines like "*Likely Asker: Nikki Diman*"
+                    else if (line.match(/^\*Likely Asker:/)) {
+                        currentLikelyAsker = line.replace(/^\*Likely Asker:\s*/, '').replace(/\*$/, '').trim();
+                        console.log(`👤 Likely asker: ${currentLikelyAsker}`);
+                    }
+                    
+                    // Detect answer sections - look for patterns like "**30-Second Core:**", "**60-Second Standard:**", etc.
+                    else if (line.match(/^\*\*(30-Second|60-Second|90-Second|Your Response|Response).*:\*\*/)) {
+                        isInAnswer = true;
+                        // Extract the answer content after the colon
+                        const answerStart = line.indexOf(':') + 1;
+                        if (answerStart > 0) {
+                            currentAnswer += line.substring(answerStart).replace(/^\*+/, '').trim() + ' ';
+                        }
+                    }
+                    
+                    // Continue collecting answer content
+                    else if (isInAnswer && currentQuestion && line && !line.startsWith('#') && !line.startsWith('*Likely Asker:')) {
+                        // Skip SQL code blocks and technical content for cleaner answers
+                        if (!line.startsWith('```') && !line.startsWith('FROM') && !line.startsWith('SELECT')) {
+                            currentAnswer += line + ' ';
+                        }
+                        
+                        // Stop answer collection at next question or major section
+                        if (line.startsWith('### Q') || line.startsWith('## ')) {
+                            isInAnswer = false;
+                        }
+                    }
+                }
+                
+                // Don't forget the last question
+                if (currentQuestion) {
+                    questions.push({
+                        question: currentQuestion.replace(/^[""]|[""]$/g, ''),
+                        answer: currentAnswer.trim() || 'Review prep notes and Q&A content',
+                        category: currentCategory || 'general',
+                        likelyAsker: currentLikelyAsker || 'Unknown'
+                    });
+                    console.log(`✅ Saved final question: ${currentQuestion.substring(0, 30)}... (Asker: ${currentLikelyAsker})`);
+                }
+                
+                console.log(`✅ Extracted ${questions.length} questions from Q&A file`);
+                return questions;
+                
+            } catch(e) { 
+                console.error('❌ Error loading Q&A markdown:', e);
+                return []; 
+            }
+        }
+
+        // Function to load strategic questions I should ask interviewers from Q&A Bank
+        async function loadStrategicQuestionsFromMarkdown() {
+            try {
+                console.log('🎤 Loading strategic questions from Google Q&A Bank.md...');
+                const res = await fetch('input_files/Google Q&A Bank.md');
+                if (!res.ok) {
+                    console.log('❌ Could not fetch Q&A file for strategic questions');
+                    return {};
+                }
+                
+                const text = await res.text();
+                const lines = text.split(/\r?\n/);
+                const strategicQuestions = {};
+                let currentPanelist = '';
+                let inStrategicSection = false;
+                
+                for (let i = 0; i < lines.length; i++) {
+                    const line = lines[i].trim();
+                    
+                    // Look for Strategic Questions Bank section
+                    if (line.match(/^## 🎤 STRATEGIC QUESTIONS BANK/)) {
+                        inStrategicSection = true;
+                        console.log('📋 Found Strategic Questions Bank section');
+                        continue;
+                    }
+                    
+                    // Stop if we hit the next major section
+                    if (inStrategicSection && line.match(/^## [^🎤]/)) {
+                        break;
+                    }
+                    
+                    if (inStrategicSection) {
+                        // Look for panelist headers like "### For Nikki Diman:"
+                        const panelistMatch = line.match(/^### For (.+):/);
+                        if (panelistMatch) {
+                            currentPanelist = panelistMatch[1].trim();
+                            strategicQuestions[currentPanelist] = [];
+                            console.log(`👤 Found strategic questions for: ${currentPanelist}`);
+                            continue;
+                        }
+                        
+                        // Look for numbered questions like '1. **"question text"**'
+                        const questionMatch = line.match(/^\d+\.\s*\*\*"(.+)"\*\*/);
+                        if (questionMatch && currentPanelist) {
+                            const question = questionMatch[1].trim();
+                            strategicQuestions[currentPanelist].push(question);
+                            console.log(`❓ Added strategic question: ${question.substring(0, 50)}...`);
+                        }
+                    }
+                }
+                
+                console.log(`✅ Extracted strategic questions for ${Object.keys(strategicQuestions).length} panelists`);
+                return strategicQuestions;
+                
+            } catch(e) { 
+                console.error('❌ Error loading strategic questions:', e);
+                return {}; 
+            }
+        }
+
+        // Function to load STAR stories from input documents (.md/.docx/.pdf)
+        async function loadSTARStoriesFromDocuments() {
+            console.log('🔍 Loading STAR stories from Interview Playbook...');
+            const stories = [];
+            
+            try {
+                // Try to load from the Interview Playbook markdown file first
+                const res = await fetch('input_files/Google - Interview Playbook.md');
+                if (res.ok) {
+                    const text = await res.text();
+                    const extractedStories = extractSTARStoriesFromPlaybook(text);
+                    stories.push(...extractedStories);
+                    console.log(`✅ Extracted ${extractedStories.length} stories from Interview Playbook`);
+                }
+            } catch (e) {
+                console.log('⚠️ Could not load Interview Playbook:', e);
+            }
+            
+            // Fallback to other files if needed
+            if (stories.length === 0) {
+                console.log('🔍 Trying alternative STAR story sources...');
+                try {
+                    const { text } = await fetchTextForCandidates([
+                        'input_files/Google - Strategic Synthesis + STAR + Experience Mapping.md',
+                        'input_files/Google - Strategic Synthesis + STAR + Experience Mapping.docx',
+                        'input_files/Google - Strategic Synthesis + STAR + Experience Mapping.pdf',
+                        'input_files/Google - Interview Playbook.md',
+                        'input_files/Google - Interview Playbook.docx',
+                        'input_files/Google - Interview Playbook.pdf'
+                    ]);
+                    if (text) {
+                        const found = extractSTARStoriesFromText(text);
+                        stories.push(...found);
+                    }
+                } catch (e) {
+                    console.log('⚠️ Could not load from alternative sources:', e);
+                }
+            }
+            
+            return stories.slice(0, 10); // Increased limit to capture more stories
+        }
+
+        function extractSTARStoriesFromPlaybook(content) {
+            console.log('📖 Parsing STAR stories from Interview Playbook content...');
+            const stories = [];
+            
+            // Split by STAR story sections - look for "### STAR #N:"
+            const starSections = content.split(/### STAR #\d+:/);
+            
+            for (let i = 1; i < starSections.length; i++) { // Skip first empty section
+                const section = starSections[i];
+                const lines = section.split('\n');
+                
+                let title = '';
+                let situation = '';
+                let task = '';
+                let action = '';
+                let result = '';
+                let learning = '';
+                let googleApplication = '';
+                
+                let currentField = '';
+                let content = '';
+                
+                for (const line of lines) {
+                    const trimmed = line.trim();
+                    
+                    // Extract title from the first meaningful line
+                    if (!title && trimmed && !trimmed.startsWith('**') && !trimmed.startsWith('#')) {
+                        title = trimmed;
+                        continue;
+                    }
+                    
+                    // Look for STAR components
+                    if (trimmed.match(/^\*\*Situation\*\*/)) {
+                        if (currentField && content) {
+                            assignField(currentField, content.trim());
+                        }
+                        currentField = 'situation';
+                        content = trimmed.replace(/^\*\*Situation\*\*[^:]*:\s*/, '');
+                    } else if (trimmed.match(/^\*\*Task\*\*/)) {
+                        if (currentField && content) {
+                            assignField(currentField, content.trim());
+                        }
+                        currentField = 'task';
+                        content = trimmed.replace(/^\*\*Task\*\*[^:]*:\s*/, '');
+                    } else if (trimmed.match(/^\*\*Action\*\*/)) {
+                        if (currentField && content) {
+                            assignField(currentField, content.trim());
+                        }
+                        currentField = 'action';
+                        content = trimmed.replace(/^\*\*Action\*\*[^:]*:\s*/, '');
+                    } else if (trimmed.match(/^\*\*Result\*\*/)) {
+                        if (currentField && content) {
+                            assignField(currentField, content.trim());
+                        }
+                        currentField = 'result';
+                        content = trimmed.replace(/^\*\*Result\*\*[^:]*:\s*/, '');
+                    } else if (trimmed.match(/^\*\*Learning\*\*/)) {
+                        if (currentField && content) {
+                            assignField(currentField, content.trim());
+                        }
+                        currentField = 'learning';
+                        content = trimmed.replace(/^\*\*Learning\*\*[^:]*:\s*/, '');
+                    } else if (trimmed.match(/^\*\*Google Play Application\*\*/)) {
+                        if (currentField && content) {
+                            assignField(currentField, content.trim());
+                        }
+                        currentField = 'googleApplication';
+                        content = trimmed.replace(/^\*\*Google Play Application\*\*[^:]*:\s*/, '');
+                    } else if (currentField && trimmed && !trimmed.startsWith('#') && !trimmed.startsWith('**')) {
+                        content += ' ' + trimmed;
+                    }
+                }
+                
+                // Handle the last field
+                if (currentField && content) {
+                    assignField(currentField, content.trim());
+                }
+                
+                function assignField(field, value) {
+                    switch(field) {
+                        case 'situation': situation = value; break;
+                        case 'task': task = value; break;
+                        case 'action': action = value; break;
+                        case 'result': result = value; break;
+                        case 'learning': learning = value; break;
+                        case 'googleApplication': googleApplication = value; break;
+                    }
+                }
+                
+                // Only add story if it has meaningful content
+                if (title && (situation || task || action || result)) {
+                    stories.push({
+                        title: title,
+                        situation: situation || 'Not specified',
+                        task: task || 'Not specified', 
+                        action: action || 'Not specified',
+                        result: result || 'Not specified',
+                        learning: learning || '',
+                        googleApplication: googleApplication || '',
+                        fromPlaybook: true
+                    });
+                    console.log(`📝 Extracted story: ${title.substring(0, 50)}...`);
+                }
+            }
+            
+            return stories;
+        }
+
+        // Extract interviewer information from all documents
+        function extractInterviewerInfo(content) {
+            const panelists = [];
+            
+            // Enhanced extraction for Nikki Diman
+            if (content.includes('Nikki Diman') || content.includes('NIKKI DIMAN')) {
+                const nikkiInfo = {
+                    name: 'Nikki Diman',
+                    role: 'Service Delivery Manager (Primary Interviewer)',
+                    background: '',
+                    hotButtons: [],
+                    interviewStyle: '',
+                    likelyQuestions: [],
+                    expertise: []
+                };
+                
+                // Extract from Q&A doc
+                const nikkiQA = content.match(/NIKKI DIMAN[^#]{0,1000}/i);
+                if (nikkiQA) {
+                    const hotButtonMatch = nikkiQA[0].match(/Hot Buttons?:([^\n]+)/i);
+                    if (hotButtonMatch) {
+                        nikkiInfo.hotButtons = hotButtonMatch[1].split(',').map(s => s.trim());
+                    }
+                    const backgroundMatch = nikkiQA[0].match(/Background:([^\n]+)/i);
+                    if (backgroundMatch) {
+                        nikkiInfo.background = backgroundMatch[1].trim();
+                    }
+                    const styleMatch = nikkiQA[0].match(/(?:Interview Style|Response Style):([^\n]+)/i);
+                    if (styleMatch) {
+                        nikkiInfo.interviewStyle = styleMatch[1].trim();
+                    }
+                }
+                
+                // Extract from Strategic Intelligence
+                const nikkiIntel = content.match(/Nikki Diman[^#]{0,2000}/i);
+                if (nikkiIntel) {
+                    // Extract professional background
+                    const expMatch = nikkiIntel[0].match(/(?:Experience|Background):[^\n]{0,300}/i);
+                    if (expMatch && !nikkiInfo.background) {
+                        nikkiInfo.background = expMatch[0].replace(/^[^:]+:/, '').trim();
+                    }
+                    
+                    // Extract expertise areas
+                    if (nikkiIntel[0].includes('19+ years')) {
+                        nikkiInfo.expertise.push('19+ years global recruiting');
+                    }
+                    if (nikkiIntel[0].includes('President') && nikkiIntel[0].includes('Circle')) {
+                        nikkiInfo.expertise.push('President\'s Circle Winner 2018-2022');
+                    }
+                    if (nikkiIntel[0].includes('Program Manager')) {
+                        nikkiInfo.expertise.push('Program Manager at Google via Scalence LLC');
+                    }
+                }
+                
+                // Extract likely questions
+                const questions = [];
+                if (content.includes('Gold-to-Platinum progression')) {
+                    questions.push('How would you diagnose and fix stagnant Gold-to-Platinum progression?');
+                }
+                if (content.includes('stakeholder') && content.includes('conflict')) {
+                    questions.push('Describe managing conflicting priorities between teams');
+                }
+                if (content.includes('ambiguous requirements')) {
+                    questions.push('How do you handle ambiguous requirements from stakeholders?');
+                }
+                nikkiInfo.likelyQuestions = questions;
+                
+                // Set enhanced defaults from Interview Playbook
+                if (!nikkiInfo.background) {
+                    nikkiInfo.background = '19+ years recruiting experience, Program Manager at Google via Scalence LLC. President\'s Circle Winner 2018-2022. Service Delivery Manager focused on creative problem-solving with minimal data and stakeholder management.';
+                }
+                if (nikkiInfo.hotButtons.length === 0) {
+                    nikkiInfo.hotButtons = ['Creative problem-solving with minimal data', 'Stakeholder management across functions', 'Thought process over perfect solutions', 'Cross-functional collaboration', 'Business impact focus'];
+                }
+                if (!nikkiInfo.interviewStyle) {
+                    nikkiInfo.interviewStyle = 'Scenario-based questions, practical business problems, values thought process and creative solutions over technical perfection';
+                }
+                
+                // Add enhanced interview preparation notes
+                nikkiInfo.philosophyNotes = 'Values creative problem-solving with minimal data and stakeholder management excellence';
+                nikkiInfo.preparationTips = ['Lead with business impact', 'Emphasize collaboration and stakeholder management', 'Show creative problem-solving process', 'Reference cross-functional success', 'Focus on practical solutions'];
+                nikkiInfo.likelyTopics = ['Play Points tier progression optimization', 'Stakeholder alignment challenges', 'Data-driven decision making with incomplete information', 'Cross-functional project management'];
+                nikkiInfo.rapportPoints = ['President\'s Circle achievement', 'Google/Scalence experience', 'Service delivery excellence', 'Recruiting industry insights'];
+                
+                panelists.push(nikkiInfo);
+            }
+            
+            // Enhanced extraction for Brian Mauch
+            if (content.includes('Brian Mauch') || content.includes('BRIAN MAUCH')) {
+                const brianInfo = {
+                    name: 'Brian Mauch',
+                    role: 'Associate Director of Recruiting (Optional)',
+                    background: '',
+                    hotButtons: [],
+                    interviewStyle: '',
+                    likelyQuestions: []
+                };
+                
+                const brianSection = content.match(/BRIAN MAUCH[^#]{0,500}/i);
+                if (brianSection) {
+                    const hotButtonMatch = brianSection[0].match(/Hot Buttons?:([^\n]+)/i);
+                    if (hotButtonMatch) {
+                        brianInfo.hotButtons = hotButtonMatch[1].split(',').map(s => s.trim());
+                    }
+                    const backgroundMatch = brianSection[0].match(/Background:([^\n]+)/i);
+                    if (backgroundMatch) {
+                        brianInfo.background = backgroundMatch[1].trim();
+                    }
+                }
+                
+                // Set enhanced defaults from Interview Playbook
+                if (!brianInfo.background) {
+                    brianInfo.background = 'Associate Director of Recruiting at Scalence LLC. Technical validation focus with emphasis on scalability experience and cultural fit assessment.';
+                }
+                if (brianInfo.hotButtons.length === 0) {
+                    brianInfo.hotButtons = ['Technical validation depth', 'Scalability experience', 'Cultural fit assessment', 'Team collaboration', 'BigQuery/SQL expertise'];
+                }
+                if (!brianInfo.interviewStyle) {
+                    brianInfo.interviewStyle = 'Technical depth validation, hands-on SQL/BigQuery scenarios, team collaboration assessment';
+                }
+                
+                // Enhanced likely questions from Interview Playbook
+                brianInfo.likelyQuestions = [
+                    'How does the team approach balancing technical debt with rapid feature development?',
+                    'What role do contractors typically play in driving strategic initiatives versus maintenance?',
+                    'What are the biggest technical challenges in processing data for 220M+ Play Points members?'
+                ];
+                
+                // Add enhanced interview preparation notes
+                brianInfo.preparationTips = ['Include technical specifics (SQL, BigQuery, Python)', 'Demonstrate scale experience (millions/billions of records)', 'Show optimization techniques', 'Reference performance improvements', 'Prepare SQL examples'];
+                brianInfo.technicalFocus = ['BigQuery optimization', 'SQL performance tuning', 'Data pipeline architecture', 'Scalability patterns'];
+                brianInfo.sqlExamples = [
+                    'Partitioning strategies for Play Points transactions',
+                    'Window function optimization for member analytics',
+                    'CTE usage for complex tier progression queries',
+                    'Materialized views for dashboard performance'
+                ];
+                
+                panelists.push(brianInfo);
+            }
+            
+            // Enhanced extraction for Jolly Jayaprakash
+            if (content.includes('Jolly Jayaprakash') || content.includes('JOLLY JAYAPRAKASH')) {
+                const jollyInfo = {
+                    name: 'Jolly Jayaprakash',
+                    role: 'Recruiter (Process Coordinator)',
+                    background: '',
+                    hotButtons: [],
+                    interviewStyle: '',
+                    likelyQuestions: []
+                };
+                
+                const jollySection = content.match(/JOLLY JAYAPRAKASH[^#]{0,500}/i);
+                if (jollySection) {
+                    const hotButtonMatch = jollySection[0].match(/Hot Buttons?:([^\n]+)/i);
+                    if (hotButtonMatch) {
+                        jollyInfo.hotButtons = hotButtonMatch[1].split(',').map(s => s.trim());
+                    }
+                    const backgroundMatch = jollySection[0].match(/Background:([^\n]+)/i);
+                    if (backgroundMatch) {
+                        jollyInfo.background = backgroundMatch[1].trim();
+                    }
+                }
+                
+                // Set defaults
+                if (!jollyInfo.background) {
+                    jollyInfo.background = '10+ years with current company, supports Google and Apple clients';
+                }
+                if (jollyInfo.hotButtons.length === 0) {
+                    jollyInfo.hotButtons = ['Immediate availability', 'Flexibility for Pacific hours', 'SQL expertise validation', 'FTE conversion potential'];
+                }
+                if (!jollyInfo.interviewStyle) {
+                    jollyInfo.interviewStyle = 'Direct, enthusiastic, emphasize availability and technical readiness';
+                }
+                
+                // Add likely questions
+                jollyInfo.likelyQuestions = [
+                    'Why Google? Why contractor role?',
+                    'What\'s your 5-year goal?',
+                    'What makes successful contractors stand out?'
+                ];
+                
+                panelists.push(jollyInfo);
+            }
+            
+            if (panelists.length > 0) {
+                appState.extractedData.panelists = panelists;
+            }
+        }
+        
+        // Extract additional panelist details from Q&A document format
+        function extractPanelistDetailsFromQA(content) {
+            // This is specifically for the structured Q&A document
+            const panelistData = [];
+            
+            // Enhanced Nikki extraction
+            const nikkiMatch = content.match(/NIKKI DIMAN[^#]{0,2000}/i);
+            if (nikkiMatch) {
+                const nikkiText = nikkiMatch[0];
+                const nikki = {
+                    name: 'Nikki Diman',
+                    role: 'Service Delivery Manager (Primary Interviewer)',
+                    archetype: 'Champion',
+                    background: '19+ years global recruiting, President\'s Circle Winner 2018-2022, Program Manager at Google via Scalence LLC',
+                    hotButtons: [
+                        'Creative problem-solving with minimal data',
+                        'Cross-functional stakeholder management', 
+                        'Extracting insights from vast datasets',
+                        'Thought process over perfect solutions'
+                    ],
+                    interviewStyle: 'Scenario-based problems, stakeholder conflict resolution, data quality challenges',
+                    likelyQuestions: [
+                        'How would you design a data mart for Google Play Points tier progression analytics?',
+                        'Walk me through investigating a sudden spike in Play Points churn rate',
+                        'Google Play Points has stagnant Gold-to-Platinum progression. How would you diagnose and fix this?',
+                        'Describe managing conflicting priorities between Product and Marketing teams',
+                        'How do you handle ambiguous requirements from stakeholders?'
+                    ],
+                    motivation: 'Finding analysts who can think creatively and communicate effectively with stakeholders',
+                    anxiety: 'Candidates who over-engineer solutions without considering business context'
+                };
+                panelistData.push(nikki);
+            }
+            
+            // Enhanced Brian extraction  
+            const brianMatch = content.match(/BRIAN MAUCH[^#]{0,1000}/i);
+            if (brianMatch) {
+                const brian = {
+                    name: 'Brian Mauch',
+                    role: 'Associate Director of Recruiting (Optional)',
+                    archetype: 'Technical Expert',
+                    background: 'Associate Director at Scalence LLC, limited public information',
+                    hotButtons: [
+                        'Technical validation',
+                        'Cultural fit',
+                        'Scalability experience'
+                    ],
+                    interviewStyle: 'Technical depth validation, team collaboration scenarios',
+                    likelyQuestions: [
+                        'How does the team approach balancing technical debt with rapid feature development?',
+                        'What role do contractors typically play in driving strategic initiatives versus maintenance?',
+                        'What are the biggest technical challenges in processing data for 220M+ Play Points members?'
+                    ],
+                    motivation: 'Validating technical depth and cultural alignment',
+                    anxiety: 'Surface-level technical knowledge without practical application'
+                };
+                panelistData.push(brian);
+            }
+            
+            // Enhanced Jolly extraction
+            const jollyMatch = content.match(/JOLLY JAYAPRAKASH[^#]{0,1000}/i);
+            if (jollyMatch) {
+                const jolly = {
+                    name: 'Jolly Jayaprakash', 
+                    role: 'Recruiter (Process Coordinator)',
+                    archetype: 'Gatekeeper',
+                    background: '10+ years with current company, supports Google and Apple clients',
+                    hotButtons: [
+                        'Immediate availability',
+                        'Flexibility for Pacific hours',
+                        'SQL expertise validation',
+                        'FTE conversion potential'
+                    ],
+                    interviewStyle: 'Direct, enthusiastic, emphasize availability and technical readiness',
+                    likelyQuestions: [
+                        'What typically drives contractor-to-FTE conversion decisions in data roles?',
+                        'With your 10 years supporting Google, what makes successful contractors stand out?',
+                        'What\'s the typical timeline for FTE transitions in the analytics team?'
+                    ],
+                    motivation: 'Ensuring smooth onboarding and long-term fit',
+                    anxiety: 'Candidates not genuinely interested in the role or lacking availability'
+                };
+                panelistData.push(jolly);
+            }
+            
+            // Merge with existing panelists or replace
+            if (panelistData.length > 0) {
+                appState.extractedData.panelists = panelistData;
+                
+                // Also populate panelistQuestions for War Room
+                appState.extractedData.panelistQuestions = {};
+                panelistData.forEach(panelist => {
+                    const questions = [];
+                    
+                    if (panelist.name === 'Nikki Diman') {
+                        questions.push(
+                            'With Play Points serving 220M+ members globally, how does your team balance standardized global metrics with local market insights?',
+                            'Given the upcoming ML expansion in 6-12 months, what specific AI initiatives are planned for Play Points personalization?',
+                            'With your extensive stakeholder management experience, what strategies work best when Product, Engineering, and Marketing have conflicting priorities?'
+                        );
+                    } else if (panelist.name === 'Brian Mauch') {
+                        questions.push(
+                            'How does the team approach balancing technical debt with rapid feature development in the Play Store ecosystem?',
+                            'What role do contractors typically play in driving strategic initiatives versus maintenance work?',
+                            'What are the biggest technical challenges in processing data for 220M+ Play Points members?'
+                        );
+                    } else if (panelist.name === 'Jolly Jayaprakash') {
+                        questions.push(
+                            'You mentioned potential for conversion to FTE - what typically drives those decisions?',
+                            'With your 10 years supporting Google, what makes successful contractors stand out?',
+                            'What\'s the typical timeline for contractor-to-FTE conversions in data roles?'
+                        );
+                    }
+                    
+                    if (questions.length > 0) {
+                        appState.extractedData.panelistQuestions[panelist.name] = questions;
+                    }
+                });
+            }
+        }
+        
+        // Extract STAR stories from documents
+        function extractSTARStories(content) {
+            const stories = extractSTARStoriesFromText(content);
+            
+            // Also look for specific story patterns in Interview Playbook
+            const starPatterns = [
+                /Customer Segmentation[^#]*/i,
+                /BigQuery Pipeline[^#]*/i,
+                /Dashboard Adoption[^#]*/i,
+                /Lean Six Sigma[^#]*/i
+            ];
+            
+            starPatterns.forEach(pattern => {
+                const match = content.match(pattern);
+                if (match && !stories.some(s => s.title.includes(match[0].substring(0, 20)))) {
+                    const storyText = match[0];
+                    const story = {
+                        title: extractTitle(storyText),
+                        situation: extractBetween(storyText, 'Situation:', 'Task:') || '',
+                        task: extractBetween(storyText, 'Task:', 'Action:') || '',
+                        action: extractBetween(storyText, 'Action:', 'Result:') || '',
+                        result: extractBetween(storyText, 'Result:', '\n\n') || '',
+                        metric: extractMetric(storyText),
+                        fromDocument: true
+                    };
+                    if (story.situation || story.task || story.action || story.result) {
+                        stories.push(story);
+                    }
+                }
+            });
+            
+            if (stories.length > 0) {
+                appState.extractedData.stories = stories;
+            }
+        }
+        
+        // Extract key metrics from documents and CSVs
+        function extractKeyMetrics(content) {
+            const metrics = [];
+            const addedMetrics = new Set();
+            
+            // Parse CSV metrics if present
+            if (content.includes('Metric/Data Point') || content.includes('Category,Value')) {
+                const lines = content.split('\n');
+                lines.forEach(line => {
+                    if (line.includes(',') && !line.startsWith('Metric') && !line.startsWith('Category')) {
+                        const parts = line.split(',');
+                        if (parts.length >= 2) {
+                            const label = parts[0].trim();
+                            const value = parts[1].trim();
+                            const growth = parts[2] ? parts[2].trim() : '';
+                            
+                            // Filter for key metrics
+                            if (label.includes('Google Play') || label.includes('Play Points') || 
+                                label.includes('Revenue') || label.includes('Users') || 
+                                label.includes('SQL') || label.includes('BigQuery')) {
+                                const key = label + value;
+                                if (!addedMetrics.has(key)) {
+                                    metrics.push({
+                                        label: label,
+                                        value: value,
+                                        growth: growth,
+                                        context: parts[3] ? parts[3].trim() : ''
+                                    });
+                                    addedMetrics.add(key);
+                                }
+                            }
+                        }
+                    }
+                });
+            }
+            
+            // Extract from text content
+            const textMetrics = [
+                { pattern: /Alphabet Q4 2024 Revenue[^\n]*\$96\.5[^\n]*/i, label: 'Alphabet Q4 2024', value: '$96.5B', growth: '+12% YoY' },
+                { pattern: /Google Play Revenue[^\n]*\$11\.63B/i, label: 'Play Store Revenue', value: '$11.63B', growth: 'Q4 2024' },
+                { pattern: /220\+?\s*million\s*(?:members|Play Points)/i, label: 'Play Points Members', value: '220+ Million', growth: 'Global' },
+                { pattern: /3\+?\s*billion\s*users/i, label: 'Google Play Users', value: '3+ Billion', growth: 'Worldwide' },
+                { pattern: /5\s*(?:levels|tiers)/i, label: 'Loyalty Tiers', value: '5 Levels', growth: 'Bronze to Diamond' },
+                { pattern: /\$58\.1\s*billion[^\n]*2024/i, label: 'Play Store Annual', value: '$58.1B', growth: '2024 Est.' },
+                { pattern: /183,323[^\n]*employee/i, label: 'Google Employees', value: '183,323', growth: 'End 2024' },
+                { pattern: /SQL[^\n]*52\.9%/i, label: 'SQL Demand', value: '52.9%', growth: 'Of job postings' },
+                { pattern: /23%[^\n]*2032/i, label: 'Analytics Growth', value: '23%', growth: 'By 2032' }
+            ];
+            
+            textMetrics.forEach(({ pattern, label, value, growth }) => {
+                if (pattern.test(content)) {
+                    const key = label + value;
+                    if (!addedMetrics.has(key)) {
+                        metrics.push({ label, value, growth, context: '' });
+                        addedMetrics.add(key);
+                    }
+                }
+            });
+            
+            // Add your personal metrics
+            const personalMetrics = [
+                { pattern: /500M\+\s*(?:SKU|records)/i, label: 'Your Scale', value: '500M+ Records', growth: 'Home Depot' },
+                { pattern: /100M\+\s*daily/i, label: 'Daily Processing', value: '100M+', growth: 'Trulieve' },
+                { pattern: /12%\s*(?:retention|improvement)/i, label: 'Retention Impact', value: '12%', growth: '$3.2M Revenue' },
+                { pattern: /80%\s*(?:manual|reduction|automation)/i, label: 'Efficiency Gain', value: '80%', growth: 'Automation' },
+                { pattern: /95%\s*(?:query|optimization|improvement)/i, label: 'Query Speed', value: '95%', growth: 'Faster' }
+            ];
+            
+            personalMetrics.forEach(({ pattern, label, value, growth }) => {
+                if (pattern.test(content)) {
+                    const key = label + value;
+                    if (!addedMetrics.has(key)) {
+                        metrics.push({ label, value, growth, context: 'Your Experience' });
+                        addedMetrics.add(key);
+                    }
+                }
+            });
+            
+            // Limit to most important metrics
+            if (metrics.length > 0) {
+                appState.extractedData.metrics = metrics.slice(0, 12);
+            }
+        }
+        
+        // Extract strengths and gaps
+        function extractStrengthsAndGaps(content) {
+            const strengths = [];
+            const gaps = [];
+            
+            // Technical strengths
+            if (content.match(/8\+?\s*years?\s*SQL/i)) {
+                strengths.push('8+ years advanced SQL expertise (CTEs, window functions, optimization)');
+            }
+            if (content.match(/BigQuery/i) && content.match(/500M\+/i)) {
+                strengths.push('BigQuery experience with 500M+ SKU records at Home Depot');
+            }
+            if (content.match(/Python/i) && content.match(/pipeline/i)) {
+                strengths.push('Python pipelines processing 100M+ daily records');
+            }
+            if (content.match(/Power BI|Tableau|Looker/i)) {
+                strengths.push('Dashboard development (Power BI, Tableau, Looker)');
+            }
+            
+            // Business impact strengths
+            if (content.match(/12%\s*(?:retention|improvement)/i)) {
+                strengths.push('12% customer retention improvement = $3.2M revenue impact');
+            }
+            if (content.match(/80%\s*(?:manual|reduction|automation)/i)) {
+                strengths.push('80% manual effort reduction = $2M annual savings');
+            }
+            if (content.match(/30%\s*adoption/i)) {
+                strengths.push('30% dashboard adoption increase across 200+ stakeholders');
+            }
+            if (content.match(/95%\s*(?:query|optimization)/i)) {
+                strengths.push('95% query optimization (10 min → 30 sec)');
+            }
+            
+            // Scale experience
+            if (content.match(/500M\+\s*(?:SKU|records)/i)) {
+                strengths.push('500M+ SKU records monthly processing');
+            }
+            if (content.match(/100M\+\s*daily/i)) {
+                strengths.push('100M+ daily transactions at scale');
+            }
+            if (content.match(/2,?000\+\s*stores/i)) {
+                strengths.push('2,000+ stores data consolidation');
+            }
+            
+            // Soft skills
+            if (content.match(/cross-functional/i) && content.match(/stakeholder/i)) {
+                strengths.push('Cross-functional collaboration (Product, Marketing, Engineering)');
+            }
+            if (content.match(/C-(?:suite|level)|executive/i)) {
+                strengths.push('Executive presentation and C-suite communication');
+            }
+            if (content.match(/50\+\s*(?:training|sessions)/i)) {
+                strengths.push('Training and mentoring (50+ sessions delivered)');
+            }
+            
+            // Extract gaps and mitigation strategies
+            if (content.match(/PLX/i) && content.match(/limited|no\s+direct/i)) {
+                gaps.push('Limited PLX/Google Sheets BI Experience → Core BI skills transfer, will complete Google certificate');
+            }
+            if (content.match(/loyalty\s+program/i) && content.match(/no\s+direct/i)) {
+                gaps.push('No direct loyalty program experience → Customer segmentation work directly parallels');
+            }
+            if (content.match(/contractor/i) && content.match(/FTE/i)) {
+                gaps.push('Contractor vs FTE role → Immediate value delivery while proving fit for conversion');
+            }
+            
+            if (strengths.length > 0) {
+                appState.extractedData.strengths = strengths;
+            }
+            if (gaps.length > 0) {
+                appState.extractedData.gaps = gaps;
+            }
+        }
+        
+        // Extract questions from Q&A documents
+        function extractQuestionsFromContent(content) {
+            const questions = appState.extractedData.questions || [];
+            const existingQuestions = new Set(questions.map(q => q.question));
+            
+            // Extract Q&A pairs from markdown format
+            const qaPatterns = [
+                /###?\s*Q\d*:?\s*"?([^"\n]+)"?\s*\n([^#]+?)(?=###?\s*Q\d*:|$)/gi,
+                /\*\*Q\d*:?\*\*\s*"?([^"\n]+)"?\s*\n([^*]+?)(?=\*\*Q\d*:|\n\n|$)/gi
+            ];
+            
+            qaPatterns.forEach(pattern => {
+                let match;
+                while ((match = pattern.exec(content)) !== null) {
+                    const question = match[1].trim();
+                    const answer = match[2].trim();
+                    
+                    if (!existingQuestions.has(question)) {
+                        const category = determineQuestionCategory(question);
+                        questions.push({
+                            question: question,
+                            answer: answer.substring(0, 500),
+                            category: category,
+                            fromDocument: true
+                        });
+                        existingQuestions.add(question);
+                    }
+                }
+            });
+            
+            // Extract rapid-fire Q&As
+            if (content.includes('RAPID-FIRE') || content.includes('Quickfire')) {
+                const rapidSection = content.match(/(?:RAPID-FIRE|Quickfire)[^#]+/i);
+                if (rapidSection) {
+                    const rapidQAs = rapidSection[0].match(/"([^"]+)"\s*→\s*"([^"]+)"/g);
+                    if (rapidQAs) {
+                        rapidQAs.forEach(qa => {
+                            const parts = qa.match(/"([^"]+)"\s*→\s*"([^"]+)"/);
+                            if (parts && !existingQuestions.has(parts[1])) {
+                                questions.push({
+                                    question: parts[1],
+                                    answer: parts[2],
+                                    category: 'technical',
+                                    fromDocument: true
+                                });
+                                existingQuestions.add(parts[1]);
+                            }
+                        });
+                    }
+                }
+            }
+            
+            appState.extractedData.questions = questions;
+        }
+        
+        // Extract company intelligence
+        function extractCompanyIntel(content) {
+            const intel = {
+                executiveBrief: {
+                    q4Performance: '$96.5B revenue (+12% YoY), $11.63B Play Store revenue (+8% YoY)',
+                    playPointsScale: '220+ million members - one of the world\'s largest loyalty programs',
+                    marketPosition: 'Google Play dominates Android ecosystem with 3.95M apps',
+                    financialStrength: '$31B operating income (+31% YoY), $26.5B net income (+28% YoY)',
+                    aiInvestment: '$75B planned CapEx investment in 2025 for AI infrastructure'
+                },
+                businessPerformance: {
+                    revenue: {
+                        'Alphabet Total Q4 2024': '$96.5B (+12% YoY)',
+                        'Google Services Q4 2024': '$84.1B (+10% YoY)', 
+                        'Google Play Store Q4 2024': '$11.63B (+8% YoY)',
+                        'Google Cloud Q4 2024': '$12.0B (+30% YoY)',
+                        'YouTube Ads Q4 2024': '$10.47B (+14% YoY)',
+                        'Play Store Annual 2024 Est': '$58.1B vs Apple\'s $111.88B'
+                    },
+                    keyMetrics: {
+                        'Play Points Members': '220+ million globally',
+                        'Play Store Apps': '3.95 million active apps',
+                        'Global Users': '3+ billion Play Store users',
+                        'Employee Count': '183,323 (end 2024)',
+                        'Free Cash Flow': '$72.8B (full year 2024)',
+                        'Operating Margin': '32% (Q4 2024)'
+                    }
+                },
+                strategicInitiatives: {
+                    aiMlIntegration: [
+                        'Gemini app team integrated into Google DeepMind',
+                        'AI-powered payment method recommendations improving transaction completion',
+                        'BigQuery ML enhanced capabilities for in-database machine learning',
+                        'Vertex AI expanding with 70%+ of innovative gen AI companies',
+                        'Full-stack approach to AI innovation across all products'
+                    ],
+                    playStorePlatform: [
+                        'Play Points expansion: Diamond Valley mini-game, extended to Brazil',
+                        'Gaming focus: Native PC titles support, multi-account gaming features',
+                        'Commerce innovation: Cart abandonment reminders, subscription highlighting',
+                        'Developer tools: Orders API expansion, pricing arbitrage protection',
+                        'Payment library enhancement with regional options (QRIS Indonesia, Troy Turkey)'
+                    ],
+                    dataModernization: [
+                        'BigQuery Studio: Generally available collaborative workspace',
+                        'Lakehouse Foundation: Unifying data lakes and warehouses',
+                        'Cross-Cloud Analytics: Enhanced BigQuery Omni',
+                        'Real-time Processing: BigQuery continuous queries for streaming',
+                        'Multimodal Analytics: Text, image, and video data processing'
+                    ]
+                },
+                challengesOpportunities: {
+                    regulatory: [
+                        'Epic Games lawsuit: $205M settlement demand, structural changes required',
+                        'EU Digital Markets Act: Potential 10% global revenue fine',
+                        'Must allow alternative app stores and payment systems',
+                        'Multiple US states settled similar cases for $700M',
+                        'Enhanced pricing arbitrage protection across more countries'
+                    ],
+                    competitive: [
+                        'Apple App Store revenue advantage: $111.88B vs Google Play $58.1B',
+                        'Gaming revenue gap: Apple $50B vs Google Play $31.3B (2022)',
+                        'Lower revenue per user but higher volume and global reach',
+                        'Forced to allow competitors due to antitrust rulings'
+                    ],
+                    opportunities: [
+                        'Enterprise AI: Growing demand for Google Cloud AI services',
+                        'International expansion: Strong in Android-dominant markets',
+                        'Play Points Diamond tier engagement optimization',
+                        'Real-time analytics for 220M+ loyalty members',
+                        'AI-powered personalization at global scale'
+                    ]
+                },
+                technologyEcosystem: {
+                    coreStack: {
+                        'Data Platform': 'BigQuery (primary SQL-based data warehouse, serverless)',
+                        'Analytics Tools': 'BigQuery ML, Looker, PLX (internal dashboard tool)',
+                        'Development': 'BigQuery Studio (collaborative workspace), Apache Spark',
+                        'AI/ML': 'Vertex AI, Gemini models integrated across products',
+                        'Storage': 'BigLake unified storage engine (Iceberg, Hudi, Delta)'
+                    },
+                    recentAdvancements: [
+                        'Gemini in BigQuery: AI-powered data preparation and analysis',
+                        'Vector Embeddings: Support for multimodal analytics',
+                        'Fine-tuning: LLM customization on enterprise data',
+                        'Automated Optimization: AI-driven query performance recommendations',
+                        'Real-time Streaming: Apache Kafka integration'
+                    ]
+                },
+                cultureWorkplace: {
+                    satisfaction: {
+                        'Glassdoor Rating': '4.6/5 (ranked 8th best workplace globally)',
+                        'Employee Reviews': '86% positive reviews (Comparably)',
+                        'Indeed Data Analyst': '4.4/5 stars with positive feedback',
+                        'Finance Team': '100% positive reviews'
+                    },
+                    workEnvironment: [
+                        'Hybrid Model: 3 days/week in-office requirement',
+                        'Badge tracking with attendance tied to performance reviews',
+                        '4 weeks/year "Work From Anywhere" allowance',
+                        'Year of Efficiency: Streamlined operations, reduced bureaucracy',
+                        'Innovation culture: 20% time for passion projects still exists'
+                    ],
+                    benefits: [
+                        'Highly competitive compensation (20-40% above market)',
+                        'Comprehensive health, dental, vision coverage',
+                        'Stock grants and performance bonuses',
+                        'Free food, gym access, comprehensive perks',
+                        '13 Google holidays + 5 PTO days minimum'
+                    ]
+                },
+                roleSpecificIntel: {
+                    department: 'Google Play - Data Science & Analytics Team',
+                    focus: 'Supporting loyalty products (Play Points, Play Pass) with cross-functional collaboration',
+                    teamStructure: 'Matrixed environment spanning multiple time zones and regions',
+                    projects: [
+                        'Play Points tier progression analytics (Bronze → Diamond)',
+                        'User engagement patterns across 220M+ loyalty members',
+                        'Revenue optimization for subscription and gaming segments',
+                        'Real-time payment optimization and recommendation engines',
+                        'Cross-platform analytics for gaming, entertainment, commerce'
+                    ],
+                    keyStakeholders: [
+                        'Product teams for Play Points feature development',
+                        'Marketing teams for user acquisition and retention',
+                        'Engineering teams for data pipeline and infrastructure',
+                        'Finance teams for revenue reporting and forecasting',
+                        'Legal/Compliance teams for regulatory requirements'
+                    ]
+                },
+                marketIntelligence: {
+                    industryGrowth: [
+                        'Data analytics jobs growing 23% through 2032 (BLS)',
+                        'SQL appears in 52.9% of data analyst job postings (2024)',
+                        'Mobile app market: Google Play 7.3% growth vs App Store 18.6%',
+                        'Gaming segment particularly strong for revenue generation'
+                    ],
+                    competitivePositioning: [
+                        'Scale advantage: 220+ million Play Points members',
+                        'Full Google ecosystem integration leverage',
+                        'Leadership in Android-dominant global markets',
+                        'Advanced AI/ML capabilities through Vertex AI and BigQuery ML'
+                    ]
+                }
+            };
+            
+            // Store as formatted string for display
+            appState.extractedData.companyIntel = JSON.stringify(intel, null, 2);
+            appState.extractedData.companyIntelSource = 'Strategic Intelligence Analysis';
+        }
+        
+        // Helper function to determine question category
+        function determineQuestionCategory(question) {
+            const q = question.toLowerCase();
+            if (q.includes('sql') || q.includes('query') || q.includes('bigquery') || q.includes('data') || q.includes('technical')) {
+                return 'technical';
+            }
+            if (q.includes('tell me about') || q.includes('describe') || q.includes('time when') || q.includes('experience')) {
+                return 'behavioral';
+            }
+            if (q.includes('would you') || q.includes('how would') || q.includes('what if')) {
+                return 'situational';
+            }
+            if (q.includes('google') || q.includes('why') || q.includes('company')) {
+                return 'company';
+            }
+            return 'behavioral';
+        }
+        
+        // Helper functions
+        function extractBetween(text, start, end) {
+            const startIdx = text.indexOf(start);
+            if (startIdx === -1) return '';
+            const fromStart = text.substring(startIdx + start.length);
+            const endIdx = fromStart.indexOf(end);
+            return endIdx === -1 ? fromStart.trim() : fromStart.substring(0, endIdx).trim();
+        }
+        
+        function extractHotButtons(text) {
+            const hotButtons = [];
+            const patterns = [
+                /creative problem-solving/i,
+                /stakeholder management/i,
+                /minimal data/i,
+                /thought process/i,
+                /cross-functional/i
+            ];
+            patterns.forEach(pattern => {
+                if (pattern.test(text)) {
+                    hotButtons.push(pattern.source.replace(/\\/g, '').replace(/i$/, ''));
+                }
+            });
+            return hotButtons.length > 0 ? hotButtons : ['Data-driven insights', 'Stakeholder collaboration'];
+        }
+        
+        function extractTitle(text) {
+            const match = text.match(/^([^\n:]{5,60})/);
+            return match ? match[1].trim() : 'STAR Story';
+        }
+        
+        function extractMetric(text) {
+            const match = text.match(/(\d+%|\$[\d\.]+[MBK]?|\d+x)/);
+            return match ? match[1] : '';
+        }
+        
+        function extractSTARStoriesFromText(text) {
+            const items = [];
+            
+            // Enhanced STAR stories with optimized narratives from Interview Playbook
+            const enhancedStories = [
+                {
+                    title: 'Customer Segmentation Driving Play Points-Scale Impact',
+                    situation: 'At Trulieve, a $1.2B cannabis operator, we faced 15% quarterly customer churn with no understanding of customer segments. Generic marketing campaigns were costing $2M monthly with declining ROI.',
+                    task: 'Lead development of ML-powered customer segmentation to enable targeted retention strategies across 100M+ transaction records, directly impacting quarterly earnings.',
+                    action: 'Architected Python pipeline processing 100M+ daily records using K-Means and Hierarchical Clustering. Built automated ETL with SAP HANA and AWS, eliminating 10+ hours weekly manual work. Created 7 distinct customer personas mapped to 120+ store locations. Designed Power BI dashboards with real-time segment tracking. Presented findings to C-suite with actionable recommendations.',
+                    result: '12% quarterly improvement in customer acquisition/retention ($43M annual impact), 20% reduction in inventory waste ($8M saved), ROI: 2100% on analytics investment.',
+                    learning: 'Learned that behavioral segmentation outperforms demographic segmentation 3:1 in loyalty programs.',
+                    googlePlayApplication: 'This directly parallels optimizing Play Points\' 220M+ members across 5 tiers, where I\'d use BigQuery ML to identify progression patterns and design targeted interventions for Gold-to-Platinum conversion.',
+                    industryTranslation: 'In the Google Play context, this approach would segment Play Points members by earning velocity, redemption patterns, and tier progression risk - using BigQuery\'s clustering capabilities to process billions of transactions efficiently.',
+                    metric: '$43M',
+                    category: 'technical',
+                    duration: '2-minute',
+                    versions: {
+                        '60-second': 'At Trulieve, I transformed customer retention by building ML segmentation across 100M+ records. Created automated Python pipelines with K-Means clustering, identifying 7 personas that drove targeted strategies. Results: 12% retention improvement worth $43M annually, 20% inventory waste reduction. For Play Points\' 220M members, I\'d apply similar BigQuery ML techniques to optimize tier progression.',
+                        '30-second': 'Built ML customer segmentation processing 100M+ daily records at Trulieve, improving retention 12% ($43M impact). Would apply same approach to Play Points\' tier optimization using BigQuery ML.',
+                        'hook': 'When Trulieve needed to improve customer retention across 120+ dispensaries with $1.2B annual revenue at stake, we had zero ML infrastructure and declining engagement metrics threatening our market position...'
+                    },
+                    interviewerNotes: {
+                        nikki: 'Lead with business impact, emphasize collaboration and stakeholder management, show creative problem-solving process, reference cross-functional success',
+                        brian: 'Include technical specifics (SQL, BigQuery, Python), demonstrate scale experience (millions/billions of records), show optimization techniques, reference performance improvements'
+                    },
+                    stakes: {
+                        financial: '$180M potential revenue loss from churn',
+                        operational: '120+ locations with inconsistent customer experiences', 
+                        strategic: 'Critical for maintaining #1 market position in Florida'
+                    },
+                    fromDocument: true
+                },
+                {
+                    title: 'BigQuery Pipeline at Google-Scale',
+                    situation: 'Home Depot\'s supply chain team manually tracked 500M+ SKU records across 2,000+ stores, causing 48-hour reporting delays and 8% mis-ship rates.',
+                    task: 'Design and implement BigQuery-based ETL pipeline to enable real-time inventory visibility, directly supporting $50B annual revenue operations.',
+                    action: 'Architected BigQuery tables with date partitioning and clustering by store_id/sku. Wrote optimized SQL with CTEs and window functions for inventory flow analysis. Reduced query time from 10 minutes to 30 seconds using materialized views. Built Tableau dashboards connected to BigQuery for real-time monitoring. Trained 50+ stakeholders, achieving 30% adoption increase.',
+                    result: '80% reduction in manual effort (520 hours annually saved), 25% decrease in mis-ships ($12.5M recovered), ROI: 1,250% in first year.',
+                    googlePlayApplication: 'This BigQuery expertise directly applies to processing Play Store\'s billions of daily transactions, where I\'d implement similar optimization strategies for Play Points analytics.',
+                    metric: '1,250%',
+                    category: 'technical',
+                    duration: '2-minute',
+                    versions: {
+                        'hook': 'Despite Home Depot processing 500M+ SKU records monthly with zero BigQuery expertise on the team, supply chain errors were costing $15M quarterly...',
+                        'technical-example': 'CREATE TABLE play_points_fact\nPARTITION BY DATE(transaction_date)\nCLUSTER BY member_id, tier_level AS\nSELECT \n  member_id,\n  SUM(points) OVER (PARTITION BY member_id \n    ORDER BY transaction_date \n    ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) as cumulative_points\nFROM transactions;'
+                    },
+                    interviewerNotes: {
+                        nikki: 'Include details about the 50+ training sessions and cross-functional adoption',
+                        brian: 'Focus on technical SQL examples, BigQuery optimization techniques, partitioning and clustering strategies'
+                    },
+                    fromDocument: true
+                },
+                {
+                    title: 'Crisis Response - Metric Investigation',
+                    situation: 'At Home Depot, finance and supply chain defined \'inventory turnover\' differently, causing 40% metric variance in executive dashboards.',
+                    task: 'Align stakeholders on unified metrics within 2 weeks before quarterly board meeting.',
+                    action: 'Facilitated 5 discovery sessions with both teams. Documented calculation methodologies in shared wiki. Created compromise: primary metric with team-specific drill-downs. Built consensus through data simulations showing impact.',
+                    result: 'Achieved alignment in 10 days (30% faster than deadline), 30% dashboard adoption increase, prevented $8M bonus dispute.',
+                    googlePlayApplication: 'Critical for aligning Product, Engineering, and Marketing teams on Play Points KPIs.',
+                    metric: '$8M',
+                    category: 'behavioral',
+                    duration: '90-second',
+                    versions: {
+                        'hook': 'When a critical inventory metric showed 40% variance threatening $8M in quarterly bonuses and supplier relationships...'
+                    },
+                    interviewerNotes: {
+                        nikki: 'Apply DACI framework: Driver (identify decision owner), Approver (get executive sponsor), Contributors (include all affected teams), Informed (broader stakeholder communication). Applied this at Home Depot to resolve the inventory metric dispute in 10 days.',
+                        brian: 'Focus on technical methodology for metric reconciliation and process improvements'
+                    },
+                    fromDocument: true
+                },
+                {
+                    title: 'Gold-to-Platinum Tier Progression Optimization',
+                    situation: 'Gold members (600-2,999 points) show 65% drop-off before Platinum (3,000+ points)',
+                    task: 'Increase Gold→Platinum conversion by 20% in 6 months',
+                    action: 'Week 1-2: Diagnostic analysis using progression_analysis CTE with median velocity, inactivity tracking, days to promotion calculations. Week 3-4: Intervention design identifying 70-85% progress members, personalized bonus events, A/B test threshold adjustments. Month 2-6: Implementation via BigQuery ML predictions, weekly cohort tracking, engagement iteration.',
+                    result: 'Expected: 20% increase in Platinum members (44,000 additional), $3-4M additional revenue from increased engagement, framework scalable to all tier transitions.',
+                    googlePlayApplication: 'Based on my Trulieve segmentation improving retention 12%, I\'d tackle Play Points progression through targeted behavioral analysis and intervention campaigns.',
+                    metric: '$3-4M',
+                    category: 'strategic',
+                    duration: '2-minute',
+                    sqlExample: 'WITH progression_analysis AS (\n  SELECT \n    member_id,\n    tier_level,\n    PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY daily_points) as median_velocity,\n    DATE_DIFF(CURRENT_DATE(), last_activity, DAY) as days_inactive,\n    points_to_next_tier / NULLIF(avg_daily_points, 0) as days_to_promotion\n  FROM member_activity\n  WHERE tier_level = \'Gold\'\n)',
+                    interviewerNotes: {
+                        nikki: 'Emphasize business impact and strategic approach to member engagement',
+                        brian: 'Include technical BigQuery implementation and optimization techniques'
+                    },
+                    fromDocument: true
+                }
+            ];
+            
+            // Add enhanced stories to items
+            items.push(...enhancedStories);
+            
+            // Try original extraction as fallback
+            const blocks = text.split(/\b(?:STAR\s*#?\d*:?|Story\s*#?\d*:?|Situation\s*:)\b/i);
+            for (let i = 1; i < blocks.length && items.length < 8; i++) {
+                const blk = blocks[i];
+                const s = extractBetween(blk, 'Situation:', 'Task:') || 
+                         extractBetween(blk, '', 'Task:') || '';
+                const t = extractBetween(blk, 'Task:', 'Action:') || '';
+                const a = extractBetween(blk, 'Action:', 'Result:') || '';
+                const r = extractBetween(blk, 'Result:', 'Learning:') || 
+                         extractBetween(blk, 'Result:', '\n\n') || '';
+                         
+                if (s && t && a && r && s.length > 20) {
+                    const newStory = {
+                        title: extractTitle(blk) || `STAR Story ${items.length + 1}`,
+                        problem: '',
+                        metric: extractMetric(r),
+                        situation: s.substring(0, 300),
+                        task: t.substring(0, 200),
+                        action: a.substring(0, 400),
+                        result: r.substring(0, 300),
+                        fromDocument: true
+                    };
+                    
+                    // Only add if not duplicate
+                    if (!items.some(existing => existing.title === newStory.title)) {
+                        items.push(newStory);
+                    }
+                }
+            }
+            
+            return items;
+        }
+
+        // Function to load panelist questions from Interview Playbook
+        async function loadPanelistQuestionsFromPlaybook() {
+            // No hard-coded panelist questions. Attempt to fetch the Playbook so future
+            // parsing can be supported, but return an empty object today.
+            try {
+                // PDF version doesn't exist, using .md version instead
+                // await fetch('input_files/Google - Interview Playbook.pdf');
+            } catch (error) { /* ignore */ }
+            return {};
+        }
+
+        // Function to generate AI-powered questions for panelists based on all input files
+        async function generateAIPanelistQuestions(panelistName, panelistRole, panelistArchetype) {
+            console.log(`🎯 Generating tailored questions for ${panelistName} (${panelistArchetype})`);
+            
+            // First try to get questions from the loaded Q&A bank based on "Likely Asker" assignments
+            let questions = [];
+            
+            // Access the current app state to get loaded questions
+            if (window.appState && window.appState.extractedData && window.appState.extractedData.questions && window.appState.extractedData.questions.length > 0) {
+                // Filter questions by likely asker matching the panelist name
+                const panelistQuestions = window.appState.extractedData.questions.filter(q => 
+                    q.likelyAsker && q.likelyAsker.toLowerCase().includes(panelistName.toLowerCase())
+                );
+                
+                if (panelistQuestions.length > 0) {
+                    questions = panelistQuestions.map(q => q.question);
+                    console.log(`📋 Found ${questions.length} specific questions assigned to ${panelistName} from Q&A Bank`);
+                    return questions;
+                } else {
+                    console.log(`⚠️ No specific questions found for ${panelistName} in Q&A Bank, using fallback questions`);
+                }
+            }
+            
+            // Fallback to curated questions if no Q&A bank questions found
+            
+            if (panelistName === 'Nikki Diman') {
+                questions = [
+                    'Tell me about a time you had to extract insights from minimal or messy data to solve a business problem.',
+                    'Describe a situation where you managed conflicting stakeholder requirements across different teams.',
+                    'How would you approach investigating a sudden 15% spike in Play Points member churn?',
+                    'Walk me through how you would present complex BigQuery analysis findings to non-technical executives.',
+                    'Give me an example of when you had to be creative in your problem-solving approach due to data limitations.'
+                ];
+            } else if (panelistName === 'Brian Mauch') {
+                questions = [
+                    'How would you optimize a BigQuery query that processes billions of Play Store transactions daily?',
+                    'Describe your experience with large-scale data architecture and pipeline design.',
+                    'Walk me through your approach to ensuring data quality in high-volume ETL processes.',
+                    'What strategies would you use to reduce query costs while maintaining performance at Google scale?',
+                    'Tell me about a time you had to troubleshoot performance issues in a data warehouse environment.'
+                ];
+            } else if (panelistName === 'Jolly Jayaprakash') {
+                questions = [
+                    'Are you available to start immediately and work Pacific Time hours when needed?',
+                    'How do you prioritize your work when supporting multiple stakeholders with urgent requests?',
+                    'What excites you most about working on Google Play Points analytics at this scale?',
+                    'Describe your experience working in fast-paced, collaborative environments.',
+                    'How do you ensure clear communication when working with distributed teams?'
+                ];
+            } else {
+                // Fallback based on archetype
+                switch (panelistArchetype) {
+                    case 'Gatekeeper':
+                        questions = [
+                            'Tell me about a time you influenced stakeholders without formal authority.',
+                            'How do you handle ambiguous requirements from multiple teams?',
+                            'Describe your approach to stakeholder management in cross-functional projects.'
+                        ];
+                        break;
+                    case 'Technical Validator':
+                        questions = [
+                        `Walk me through your approach to statistical analysis in A/B testing.`,
+                        `How do you validate data models and ensure statistical rigor?`,
+                        `Describe a complex data problem you solved using advanced analytics.`
+                        ];
+                        break;
+                case 'Ally':
+                    questions = [
+                        `How do you handle ambiguity in project requirements?`,
+                        `Tell me about a time you had to learn a new technology quickly.`,
+                        `What motivates you to work in data analytics?`
+                    ];
+                    break;
+                case 'Skeptic':
+                    questions = [
+                        `What are the biggest challenges you see in data analytics?`,
+                        `How do you ensure your analysis is robust and defensible?`,
+                        `Tell me about a time your analysis was challenged and how you responded.`
+                    ];
+                    break;
+                case 'Gatekeeper':
+                    questions = [
+                        `How do you prioritize multiple competing data requests?`,
+                        `What criteria do you use to evaluate data quality?`,
+                        `Describe your process for ensuring compliance and governance.`
+                    ];
+                    break;
+                default:
+                    questions = [
+                        `Tell me about your experience with ${panelistRole}.`,
+                        `What are the key challenges in this role?`,
+                        `How do you measure success in data analytics?`
+                    ];
+                }
+            }
+            
+            // Add company-specific context if available
+            if (appState.extractedData.company) {
+                questions.push(`How does your experience align with ${appState.extractedData.company}'s data culture?`);
+            }
+            
+            return questions;
+        }
+
+        function addPanelist() {
+            const name = document.getElementById('panelistName').value;
+            const role = document.getElementById('panelistRole').value;
+            const archetype = document.getElementById('panelistArchetype').value;
+            
+            if (!name || !role) {
+                showToast('Please enter name and role', 'warning');
+                return;
+            }
+            
+            appState.extractedData.panelists.push({
+                name,
+                role,
+                archetype,
+                motivation: 'Evaluating overall fit for the role',
+                anxiety: 'Looking for potential red flags'
+            });
+            
+            updatePanelStrategy();
+            updateDebriefDropdown();
+            
+            // Clear inputs
+            document.getElementById('panelistName').value = '';
+            document.getElementById('panelistRole').value = '';
+            
+            showToast('Panelist added!', 'success');
+        }
+
+
+        async function loadSampleData() {
+            console.log('🚀 Loading comprehensive interview data...');
+            updateDataStatus('Loading interview materials from files...', 'info');
+            
+            // Questions: prefer Markdown bank, then CSV fallback
+            let questions = [];
+            let strategicQuestions = {};
+            try {
+                console.log('📋 Loading questions from Q&A Bank...');
+                const questionsFromMD = await loadQuestionsFromMarkdown();
+                if (questionsFromMD && questionsFromMD.length > 0) {
+                    questions = questionsFromMD;
+                    console.log(`✅ Loaded ${questions.length} questions from Q&A Bank`);
+                } else {
+                    console.log('📋 Fallback to CSV questions...');
+                    const questionsFromCSV = await loadQuestionsFromCSV();
+                    questions = questionsFromCSV;
+                    console.log(`✅ Loaded ${questions.length} questions from CSV`);
+                }
+                
+                // Also load strategic questions I should ask them
+                console.log('🎤 Loading strategic questions...');
+                strategicQuestions = await loadStrategicQuestionsFromMarkdown();
+                console.log(`✅ Loaded strategic questions for ${Object.keys(strategicQuestions).length} interviewers`);
+            } catch (error) {
+                console.log('❌ Could not load questions:', error);
+                questions = [];
+                strategicQuestions = {};
+            }
+
+            // STAR Stories from documents
+            let stories = [];
+            try {
+                console.log('⭐ Loading STAR stories from documents...');
+                stories = await loadSTARStoriesFromDocuments();
+                console.log(`✅ Loaded ${stories.length} STAR stories`);
+            } catch (error) {
+                console.log('❌ Could not load STAR stories:', error);
+                stories = [];
+            }
+
+            // Extract panelists from documents - with deduplication
+            let panelists = [];
+            let panelistQuestions = {};
+            try {
+                console.log('👥 Loading panelist information...');
+                const extracted = await loadPanelistsFromDocuments();
+                // Deduplicate panelists by name
+                const panelistMap = new Map();
+                (extracted.panelists || []).forEach(panelist => {
+                    panelistMap.set(panelist.name.toLowerCase().trim(), panelist);
+                });
+                panelists = Array.from(panelistMap.values());
+                panelistQuestions = extracted.panelistQuestions || {};
+                console.log(`✅ Loaded ${panelists.length} unique panelists`);
+            } catch (error) {
+                console.log('❌ Could not extract panelists:', error);
+                panelists = [];
+            }
+
+            // Panelist-specific questions: set from extracted docs if present
+
+            // Enriched Company Intel (CSVs + Strategic Docs)
+            let intel = { markdown: '', source: 'Strategic Intelligence' };
+            try {
+                const intelCSV = await loadCompanyIntelFromCSVs();
+                const intelDocsMD = await loadCompanyIntelFromStrategicDocs();
+                intel = {
+                    markdown: intelCSV.markdown + (intelDocsMD ? '\n\n' + intelDocsMD : ''),
+                    source: 'Strategic Intelligence'
+                };
+            } catch (error) {
+                console.log('Could not load company intel:', error);
+            }
+
+            // Metrics for Command Center (from key metrics CSV)
+            let metrics = [];
+            try {
+                metrics = await loadMetricsForCommandCenter();
+            } catch (error) {
+                console.log('Could not load metrics:', error);
+                metrics = getDefaultMetrics(); // Use default metrics as fallback
+            }
+
+            // Infer company/role hints from available files/metrics
+            let inferred = { company: 'Google Play', role: 'BI Data Analyst' };
+            try {
+                inferred = await inferCompanyAndRoleFromFiles(intel);
+            } catch (error) {
+                console.log('Could not infer company/role:', error);
+            }
+
+            // Extract comprehensive strengths and gaps from all documents
+            let strengths = [];
+            let gaps = [];
+            
+            // Core technical strengths (always include)
+            const coreStrengths = [
+                'Advanced SQL & BigQuery optimization (8+ years)',
+                'Large-scale data processing (500M+ records, 100M+ daily transactions)',
+                'Cloud data warehouse experience (Snowflake, BigQuery)',
+                'Executive stakeholder management & dashboard adoption (200+ users)',
+                'Cross-functional collaboration & process optimization',
+                'Statistical analysis & A/B testing methodologies',
+                'Data pipeline architecture & ETL/ELT design',
+                'Performance optimization (95% query improvement achievements)',
+                'Business impact quantification ($3.2M retention, $2M cost savings)',
+                'Analytical problem-solving & root cause analysis',
+                'Python data tooling (pandas, notebooks)',
+                'Lean Six Sigma process improvement methodologies'
+            ];
+            
+            try {
+                console.log('💪 Loading strengths from strategic documents...');
+                const sg = await extractStrengthsAndGapsFromStrategicDocs();
+                const docStrengths = sg.strengths || [];
+                const docGaps = sg.gaps || [];
+                
+                // Merge with core strengths, avoiding duplicates
+                const allStrengths = [...coreStrengths, ...docStrengths];
+                strengths = Array.from(new Set(allStrengths.map(s => s.trim()))).slice(0, 15);
+                gaps = docGaps.length > 0 ? docGaps : [
+                    'Google Cloud Platform specific experience',
+                    'Play Points domain knowledge & user behavior patterns',
+                    'Internal Google processes & collaboration tools'
+                ];
+                
+                console.log(`✅ Compiled ${strengths.length} strengths and ${gaps.length} gaps`);
+                
+            } catch (e) {
+                console.log('⚠️ Using core strengths as fallback');
+                strengths = coreStrengths;
+                gaps = [
+                    'Google Cloud Platform specific experience',
+                    'Play Points domain knowledge & user behavior patterns', 
+                    'Internal Google processes & collaboration tools'
+                ];
+            }
+
+            // Enhance with resume-specific achievements
+            try {
+                console.log('📄 Extracting additional strengths from resume...');
+                const resumeStrengths = await extractStrengthsFromResume();
+                if (resumeStrengths && resumeStrengths.length > 0) {
+                    strengths = Array.from(new Set([...strengths, ...resumeStrengths])).slice(0, 18);
+                    console.log(`✅ Enhanced to ${strengths.length} total strengths`);
+                }
+            } catch (e) {
+                console.log('⚠️ Could not enhance from resume');
+            }
+
+            appState.extractedData = {
+                company: inferred.company || '',
+                role: inferred.role || '',
+                metrics,
+                strengths,
+                gaps,
+                panelists,
+                panelistQuestions,
+                questions: questions,
+                stories: stories,
+                strategicQuestions: strategicQuestions,
+                companyIntel: intel.markdown,
+                companyIntelSource: intel.source,
+                culturalNotes: `**Google Play Cultural Intelligence & Fit Signals:**
+
+**🎯 Core Values Alignment:**
+• **"Year of Efficiency"**: Emphasize automation, optimization, and scalable solutions (tie to your 80% manual effort reduction, 95% query performance improvements)
+• **Data-Driven Decision Making**: Reference specific metrics and A/B testing methodologies from your experience
+• **Cross-Functional Collaboration**: Highlight experience with C-suite, engineering, and product teams (200+ stakeholders trained)
+• **User-Centric Innovation**: Connect Play Points member experience to your customer segmentation work (220M+ members parallel)
+
+**🏢 Google-Specific Context Signals:**
+• **Scale Comfort**: "I've successfully processed 500M+ records at Home Depot, positioning me well for Play Store's billions of daily transactions"
+• **BigQuery Native**: "My BigQuery optimization experience reducing 10min → 30sec queries directly applies to Play Points analytics infrastructure"
+• **AI/ML Ready**: "Excited about the 6-12 month AI/ML integration timeline - my clustering experience provides immediate value"
+• **Contractor Excellence**: "I understand delivering exceptional value as a Scalence contractor while integrating seamlessly with Google teams"
+
+**💬 Cultural Conversation Starters:**
+• "What aspects of the Year of Efficiency initiative excite the team most?"
+• "How does the Play Points team balance rapid experimentation with data rigor?"
+• "I'm curious about the cross-functional dynamics between Product and Engineering on Play Points features"
+• "What opportunities do you see for BigQuery optimization in the current Play Points infrastructure?"
+
+**🚫 Cultural Pitfalls to Avoid:**
+• Don't oversell - Google values humble confidence
+• Avoid startup mentality references - emphasize enterprise scale thinking
+• Don't criticize previous tools/approaches - focus on optimization opportunities
+• Avoid generic answers - always tie back to Play Points context (220M members, tier progression, $11.63B ecosystem)
+
+**📊 Metrics That Resonate:**
+• Scale: 500M+ records, 100M+ daily processing, 220M+ members
+• Efficiency: 95% performance improvement, 80% manual reduction
+• Impact: $43M revenue impact, 12% retention improvement
+• Adoption: 30% dashboard increase, 200+ stakeholders
+• ROI: 2100% analytics investment return`
+            };
+
+            updateDashboard();
+            showToast('Data loaded from input_files.', 'success');
+            switchTab('command');
+        }
+
+        // AI Generation Functions (Mock implementations)
+        async function generatePowerIntro() {
+            const introDiv = document.getElementById('powerIntro');
+            introDiv.innerHTML = `
+                <div style="padding: 2rem; background: linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%); border-radius: 0.75rem; border-left: 4px solid #0ea5e9;">
+                    <div style="display: flex; align-items: center; margin-bottom: 1rem;">
+                        <h3 style="color: #1e293b; margin: 0; margin-right: 0.5rem;">🎯 Strategic Opening Hook</h3>
+                        ${aiBadge()}
+                    </div>
+                    
+                    <div style="background: white; padding: 1.5rem; border-radius: 0.5rem; margin-bottom: 1rem;">
+                        <h4 style="color: #0ea5e9; margin-bottom: 1rem;">💼 Your 90-Second Power Hook</h4>
+                        <p style="line-height: 1.6; font-size: 1rem;"><strong>"Thank you for this opportunity to discuss the Google Play BI role.</strong></p>
+                        <p style="line-height: 1.6; margin-top: 1rem;"><strong>I bring 8+ years of advanced SQL expertise</strong> specifically optimized for billion-row datasets, with proven success processing <strong>500M+ SKU records at Home Depot</strong> and <strong>100M+ daily transactions at Trulieve.</strong></p>
+                        <p style="line-height: 1.6; margin-top: 1rem;"><strong>My impact is measurable:</strong> I've driven <strong>12% customer retention improvements worth $3.2M</strong>, achieved <strong>95% query optimization</strong> reducing processing from 10 minutes to 30 seconds, and increased <strong>dashboard adoption by 30%</strong> across 200+ stakeholders.</p>
+                        <p style="line-height: 1.6; margin-top: 1rem;"><strong>What excites me about this role</strong> is applying this scalable expertise to <strong>Google Play's 220M+ Play Points members</strong> and <strong>$11.63B quarterly ecosystem,</strong> particularly addressing the Gold-to-Platinum progression challenges and supporting the upcoming AI/ML integration expansion."</p>
+                        <p style="line-height: 1.6; margin-top: 1rem; font-style: italic; color: #64748b;"><strong>Duration: 85-90 seconds | Key metrics embedded | Direct role relevance</strong></p>
+                    </div>
+                    
+                    <div style="background: linear-gradient(135deg, #22c55e 0%, #16a34a 100%); color: white; padding: 1rem; border-radius: 0.5rem;">
+                        <h4 style="color: white; margin-bottom: 0.75rem;">🚀 Opening Impact Framework</h4>
+                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+                            <div>
+                                <strong>Hook (15s):</strong> Role-specific expertise + scale<br>
+                                <strong>Proof (45s):</strong> 3 quantified achievements<br>
+                                <strong>Bridge (25s):</strong> Google Play relevance + enthusiasm
+                            </div>
+                            <div>
+                                <strong>Key Numbers:</strong> 500M+, $3.2M, 95%, 220M+<br>
+                                <strong>Differentiators:</strong> SQL mastery, C-level experience<br>
+                                <strong>Context:</strong> Play Points challenges, AI/ML future
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `;
+            showToast('Comprehensive power hook generated!', 'success');
+        }
+
+        async function generateTalkingPoints() {
+            const pointsDiv = document.getElementById('talkingPoints');
+            pointsDiv.innerHTML = `
+                <div style="padding: 2rem; background: linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%); border-radius: 0.75rem; border-left: 4px solid #22c55e;">
+                    <div style="display: flex; align-items: center; margin-bottom: 1rem;">
+                        <h3 style="color: #1e293b; margin: 0; margin-right: 0.5rem;">🎯 Strategic Talking Points</h3>
+                        ${aiBadge()}
+                    </div>
+                    
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem;">
+                        <!-- Technical Excellence Column -->
+                        <div style="background: white; padding: 1.5rem; border-radius: 0.5rem;">
+                            <h4 style="color: #22c55e; margin-bottom: 1rem; display: flex; align-items: center;">
+                                ⚙️ Technical Excellence
+                            </h4>
+                            <ul style="line-height: 1.8; margin: 0; padding-left: 1rem;">
+                                <li><strong>Scale Mastery:</strong> 500M+ SKU records, 100M+ daily transactions processed</li>
+                                <li><strong>Query Optimization:</strong> 95% performance improvement (10min→30sec)</li>
+                                <li><strong>BigQuery Readiness:</strong> Snowflake expertise transfers directly to Google's platform</li>
+                                <li><strong>Pipeline Architecture:</strong> Built automated ETL reducing manual effort by 80%</li>
+                                <li><strong>Cloud Native:</strong> AWS, Azure, GCP experience with modern data stacks</li>
+                            </ul>
+                        </div>
+                        
+                        <!-- Business Impact Column -->
+                        <div style="background: white; padding: 1.5rem; border-radius: 0.5rem;">
+                            <h4 style="color: #3b82f6; margin-bottom: 1rem; display: flex; align-items: center;">
+                                📊 Business Impact
+                            </h4>
+                            <ul style="line-height: 1.8; margin: 0; padding-left: 1rem;">
+                                <li><strong>Revenue Generation:</strong> $3.2M impact through 12% retention improvement</li>
+                                <li><strong>Cost Savings:</strong> $2M annual savings through automation</li>
+                                <li><strong>Stakeholder Enablement:</strong> 30% dashboard adoption across 200+ users</li>
+                                <li><strong>Executive Communication:</strong> C-level presentation experience</li>
+                                <li><strong>Cross-Functional Leadership:</strong> Lean Six Sigma process optimization</li>
+                            </ul>
+                        </div>
+                    </div>
+                    
+                    <div style="background: white; padding: 1.5rem; border-radius: 0.5rem; margin-top: 1.5rem;">
+                        <h4 style="color: #8b5cf6; margin-bottom: 1rem;">🚀 Google Play Specific Relevance</h4>
+                        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 1rem;">
+                            <div style="background: #f8fafc; padding: 1rem; border-radius: 0.25rem; border-left: 3px solid #8b5cf6;">
+                                <strong>Play Points Optimization:</strong> My customer segmentation expertise directly applies to analyzing loyalty tier progression patterns across 220M+ members
+                            </div>
+                            <div style="background: #f8fafc; padding: 1rem; border-radius: 0.25rem; border-left: 3px solid #0ea5e9;">
+                                <strong>AI/ML Readiness:</strong> Experience with Python ML pipelines positions me well for the upcoming 6-12 month AI integration expansion
+                            </div>
+                            <div style="background: #f8fafc; padding: 1rem; border-radius: 0.25rem; border-left: 3px solid #f59e0b;">
+                                <strong>Regulatory Awareness:</strong> Understanding of data governance requirements relevant to Epic Games settlement and EU DMA compliance
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div style="background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%); color: white; padding: 1rem; border-radius: 0.5rem; margin-top: 1.5rem;">
+                        <h4 style="color: white; margin-bottom: 0.75rem;">💡 Key Differentiators to Emphasize</h4>
+                        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 1rem;">
+                            <div><strong>• Immediate Impact:</strong> 8+ years SQL means zero ramp-up time</div>
+                            <div><strong>• Proven Scale:</strong> Already operating at Google-level data volumes</div>
+                            <div><strong>• Stakeholder Savvy:</strong> C-level presentation skills rare in contractor pool</div>
+                            <div><strong>• Process Excellence:</strong> Lean Six Sigma aligns with "Year of Efficiency"</div>
+                        </div>
+                    </div>
+                </div>
+            `;
+            showToast('Comprehensive talking points generated!', 'success');
+        }
+
+        async function generateGapStrategies() {
+            const gapsList = document.getElementById('gapsList');
+            gapsList.innerHTML += `
+                <div style="margin-top: 1rem; padding: 1rem; background: #fef3c7; border-radius: 0.5rem; border-left: 4px solid #0ea5e9;">
+                    <div style="display: flex; align-items: center; margin-bottom: 0.5rem;">${aiBadge()}</div>
+                    <strong>Mitigation Strategies:</strong>
+                    <ul style="margin-top: 0.5rem; font-size: 0.875rem;">
+                        <li>• Emphasize quick learning ability</li>
+                        <li>• Highlight transferable skills</li>
+                        <li>• Show proactive learning steps taken</li>
+                    </ul>
+                </div>
+            `;
+            showToast('Strategies generated!', 'success');
+        }
+
+        async function generateCulturalAnalysis() {
+            const culturalDiv = document.getElementById('culturalFit');
+            
+            // Check if there's already meaningful content loaded from files
+            const hasRealContent = culturalDiv.innerHTML.trim() && 
+                                 !culturalDiv.innerHTML.includes('How to Demonstrate Cultural Fit') &&
+                                 !culturalDiv.innerHTML.includes('Use data in every answer') &&
+                                 !culturalDiv.innerHTML.includes('Cultural analysis will be populated here') &&
+                                 culturalDiv.innerHTML.length > 100 &&
+                                 culturalDiv.innerHTML.includes('Google Play Cultural Intelligence');
+            
+            if (hasRealContent) {
+                // Don't overwrite existing cultural analysis data
+                console.log('✅ Preserving existing cultural fit analysis');
+                showToast('Cultural fit analysis already loaded!', 'info');
+                return;
+            }
+            
+            const analysisHTML = `
+                <div style="padding: 1rem; background: #f0f9ff; border-radius: 0.5rem; border-left: 4px solid #0ea5e9;">
+                    <div style="display: flex; align-items: center; margin-bottom: 0.5rem;">${aiBadge()}</div>
+                    <p><strong>How to Demonstrate Cultural Fit:</strong></p>
+                    <ul>
+                        <li>• Use data in every answer</li>
+                        <li>• Emphasize collaboration</li>
+                        <li>• Show user-centric thinking</li>
+                        <li>• Demonstrate learning mindset</li>
+                    </ul>
+                </div>
+            `;
+            
+            culturalDiv.innerHTML = analysisHTML;
+            showToast('Cultural fit guidance generated!', 'success');
+        }
+
+        async function generatePanelistQuestion(name) {
+            const questionDiv = document.getElementById(`question-${name.replace(/\s/g, '-')}`);
+
+            // First try to get strategic questions I should ask them from Q&A Bank
+            let questions = appState.extractedData.strategicQuestions?.[name];
+            let questionSource = 'STRATEGIC QUESTIONS FROM Q&A BANK';
+            let borderColor = '#22c55e';
+
+            // If no strategic questions exist for this panelist, fallback to role-appropriate strategic questions
+            if (!questions || questions.length === 0) {
+                // Generate strategic questions based on their role
+                if (name.includes('Nikki') || name.includes('Service Delivery')) {
+                    questions = [
+                        'What strategies work best when Product, Engineering, and Marketing have conflicting priorities?',
+                        'How does your team balance global metrics with local market insights?',
+                        'What upcoming AI initiatives are planned for Play Points in the next 6-12 months?'
+                    ];
+                } else if (name.includes('Brian') || name.includes('Associate Director')) {
+                    questions = [
+                        'How does the team balance technical debt with rapid feature development?',
+                        'What role do contractors typically play in driving strategic initiatives?',
+                        'What are the biggest technical challenges with 220M+ member data processing?'
+                    ];
+                } else if (name.includes('Jolly') || name.includes('Recruiter')) {
+                    questions = [
+                        'What typically drives contractor-to-FTE conversion decisions?',
+                        'What makes successful contractors stand out in your experience?',
+                        'What\'s the typical timeline for FTE transitions in analytics teams?'
+                    ];
+                } else {
+                    questions = [
+                        'What aspects of this role do you find most exciting?',
+                        'How would you describe the team culture and collaboration style?',
+                        'What growth opportunities exist for this position?'
+                    ];
+                }
+                questionSource = 'STRATEGIC QUESTIONS (FALLBACK)';
+                borderColor = '#fbbf24';
+            }
+            
+            // Randomly select a question
+            const randomIndex = Math.floor(Math.random() * questions.length);
+            const selectedQuestion = questions[randomIndex];
+
+            questionDiv.innerHTML = `
+                <div style="padding: 1rem; background: white; border-radius: 0.5rem; border-left: 4px solid ${borderColor};">
+                    <div style="display: flex; align-items: center; margin-bottom: 0.5rem;">
+                        ${questionSource.includes('Q&A BANK') ? '<span class="source-note">From Q&A Bank Strategic Questions</span>' : ''}
+                        ${questionSource.includes('FALLBACK') ? '<span class="source-note">Strategic Question (Fallback)</span>' : ''}
+                    </div>
+                    <strong>Strategic Question to Ask ${name}:</strong> "${selectedQuestion}"
+                </div>
+            `;
+
+            const sourceMessage = questionSource.includes('Q&A BANK') ? 'Strategic question from Q&A Bank loaded!' : 
+                                questionSource.includes('FALLBACK') ? 'Strategic question generated for this interviewer!' : 
+                                'Strategic question ready!';
+            showToast(sourceMessage, 'success');
+        }
+
+        async function generateMoreQuestions() {
+            // Initialize with comprehensive questions if empty
+            if (!appState.extractedData.questions || appState.extractedData.questions.length === 0) {
+                appState.extractedData.questions = [];
+                populateDetailedQuestions();
+                return;
+            }
+            
+            // Generate additional AI questions based on Google Play context
+            const newQuestions = [
+                { 
+                    question: 'How would you support the upcoming AI/ML integration for Play Points personalization?', 
+                    answer: 'Focus: BigQuery ML capabilities, real-time pipelines, A/B testing framework • Use STAR: ML implementation at Trulieve improving acquisition 12% • Prepare for: Model monitoring, feature engineering, ethical AI considerations',
+                    category: 'technical',
+                    interviewer: 'brian',
+                    difficulty: 'hard',
+                    starStory: 'At Trulieve, similar ML clustering initiatives drove $3.2M annual revenue increase through personalized customer segments.',
+                    metrics: '• $3.2M revenue impact<br>• 12% acquisition improvement<br>• 8 distinct member personas<br>• BigQuery ML implementation',
+                    aiGenerated: true 
+                },
+                { 
+                    question: 'We need real-time dashboards for 200+ stakeholders. How would you approach this?', 
+                    answer: 'Focus: Role-based design, caching strategies, self-service capabilities • Use STAR: Home Depot dashboard adoption success (30% increase) • Prepare for: Performance optimization, user training, maintenance',
+                    category: 'situational',
+                    interviewer: 'nikki', 
+                    difficulty: 'medium',
+                    starStory: 'From training 50+ users at Home Depot and achieving 30% adoption increase through stakeholder segmentation and targeted training.',
+                    metrics: '• 200+ stakeholders<br>• 30% adoption increase<br>• 50+ training sessions<br>• Role-based dashboard design',
+                    aiGenerated: true 
+                },
+                { 
+                    question: 'How do you ensure data quality when working with 220+ million Play Points members?', 
+                    answer: 'Focus: Automated validation, anomaly detection, data lineage • Use STAR: Home Depot data quality framework with 500M+ SKUs • Prepare for: Data governance, quality metrics, remediation processes',
+                    category: 'technical',
+                    interviewer: 'brian',
+                    difficulty: 'medium', 
+                    starStory: 'At Home Depot, I built automated data quality checks for 500M+ SKU records, reducing data inconsistencies by 80% and preventing downstream analytical errors.',
+                    metrics: '• 500M+ records monitored<br>• 80% inconsistency reduction<br>• Automated validation rules<br>• Real-time anomaly detection',
+                    aiGenerated: true 
+                }
+            ];
+            
+            appState.extractedData.questions.push(...newQuestions);
+            updateQuestionList();
+            showToast('Enhanced AI questions generated!', 'success');
+        }
+
+        // Populate detailed questions from prep materials
+        function populateDetailedQuestions() {
+            const detailedQuestions = [
+                {
+                    question: "How would you design a data mart for Google Play Points tier progression analytics?",
+                    category: "technical",
+                    difficulty: "hard",
+                    interviewer: "nikki",
+                    priority: "high",
+                    quickAnswer: "Star schema with member_fact at center, partitioned by date, clustered by member_id and tier_level for optimal BigQuery performance.",
+                    answer: "I'd create a **star schema** with member_fact at the center, dimension tables for tiers, time, geography, and redemption types. Using **BigQuery's partitioning by date** and **clustering by member_id and tier_level** for optimal query performance with 220M+ members.",
+                    starStory: "At Trulieve, I designed a star-schema warehouse processing 100M+ daily records. This reduced query time from 10 minutes to 30 seconds at Home Depot using similar BigQuery optimization.",
+                    metrics: "• 220M+ members globally<br>• 5 tier levels (Bronze → Silver → Gold → Platinum → Diamond)<br>• Query performance: 10min → 30sec improvement",
+                    followUps: "• How would you handle real-time vs batch processing?<br>• What about data quality validation?<br>• How would you scale for international markets?",
+                    googleApplication: "For Play Points, I'd implement similar partitioning strategies for 220M member transactions, using clustering on member_id and tier_level for optimal query performance."
+                },
+                {
+                    question: "Walk me through investigating a sudden spike in Play Points churn rate",
+                    category: "situational", 
+                    difficulty: "medium",
+                    interviewer: "nikki",
+                    priority: "high",
+                    quickAnswer: "Segment by tier level, cohort, geography using BigQuery CTEs. Compare pre/post spike behaviors, check external factors, build predictive model.",
+                    answer: "I'd use a systematic approach: **1) Cohort analysis** using window functions, **2) Segment identification** (specific tiers, regions), **3) External factor examination** (policy changes, technical issues), **4) Predictive modeling** for at-risk members.",
+                    starStory: "Similar to my Trulieve customer retention analysis that improved metrics by 12%, I built cohort analyses that recovered $3.2M in annual revenue by identifying at-risk customer segments.",
+                    metrics: "• 15% churn spike target<br>• Gold tier members focus (600-2,999 pts)<br>• 30-day inactive threshold<br>• Expected 2-hour root cause identification",
+                    followUps: "• What if the cause is external (competitor launch)?<br>• How would you prioritize which segments to address first?<br>• What intervention strategies would you recommend?",
+                    googleApplication: "With Play Points' 220M members, I'd focus on the Gold→Platinum transition gap where the 5x point jump (2,999 to 3,000+) creates the highest churn risk."
+                },
+                {
+                    question: "How would you optimize a slow BigQuery query processing billions of Play Store transactions?",
+                    category: "technical",
+                    difficulty: "hard", 
+                    interviewer: "brian",
+                    quickAnswer: "PARTITION BY DATE for time-series, CLUSTER BY frequently filtered columns, replace subqueries with CTEs, use materialized views.",
+                    answer: "**Optimization strategy:** 1) **PARTITION BY DATE(transaction_date)** for time-series queries, 2) **CLUSTER BY member_id, tier_level** for member-focused queries, 3) **Replace nested subqueries with CTEs**, 4) **Materialized views** for dashboard aggregations, 5) **APPROX functions** for large-scale estimates.",
+                    starStory: "At Home Depot, I optimized queries from 10 minutes to 30 seconds processing 500M+ SKU records by implementing proper partitioning, clustering, and converting nested subqueries to CTEs. This 95% performance improvement saved 1,040+ hours annually.",
+                    metrics: "• 500M+ records processed<br>• 95% performance improvement (10min → 30sec)<br>• 1,040+ hours annual savings<br>• 80% reduction in manual effort",
+                    followUps: "• How do you balance query performance vs storage costs?<br>• What about handling schema evolution?<br>• How would you monitor query performance over time?",
+                    googleApplication: "For Play Points queries handling 220M+ members, I'd prioritize partitioning and clustering strategies, using APPROX_COUNT_DISTINCT for member estimates and materialized views for real-time dashboard performance."
+                },
+                {
+                    question: "Google Play Points has stagnant Gold-to-Platinum progression. How would you diagnose and fix this?",
+                    category: "situational",
+                    difficulty: "medium",
+                    interviewer: "nikki", 
+                    priority: "high",
+                    quickAnswer: "Analyze point-earning velocity by cohort, identify high-potential Gold members (70-80% toward threshold), design targeted interventions.",
+                    answer: "**Diagnosis approach:** 1) **Cohort analysis** of Gold members' point-earning velocity, 2) **Identify high-potential segments** (70-80% toward Platinum threshold), 3) **A/B test interventions** (bonus events, progressive challenges), 4) **Monitor progression velocity** and ROI.",
+                    starStory: "Based on my customer segmentation work improving retention 12% at Trulieve, I'd apply similar clustering techniques to identify Gold members losing momentum and design targeted interventions.",
+                    metrics: "• Gold: 600-2,999 points (5x jump to Platinum)<br>• Target: 15-20% increase in Platinum progression<br>• Expected: $2-3M additional revenue<br>• Timeline: 6 months for results",
+                    followUps: "• What if the 3,000 point threshold is fundamentally too high?<br>• How would you measure intervention success?<br>• What about international market variations?",
+                    googleApplication: "I'd leverage BigQuery ML's K-Means clustering to segment Gold members by earning velocity, redemption patterns, and engagement frequency, focusing on the critical 2,500+ point range where members approach the Platinum threshold."
+                },
+                {
+                    question: "Describe managing conflicting priorities between Product and Marketing teams",
+                    category: "behavioral",
+                    difficulty: "medium",
+                    interviewer: "nikki",
+                    quickAnswer: "Facilitate alignment workshops, document unified metrics definitions, propose primary KPIs with team-specific drill-downs.",
+                    answer: "I focus on **finding common ground** through data. I facilitate workshops to align on shared objectives, document calculation methodologies, and create dashboards that serve both teams' needs while maintaining data consistency.",
+                    starStory: "**Situation:** At Home Depot, supply chain and finance defined 'inventory turnover' differently. **Task:** Align both teams on unified metrics for Tableau dashboards. **Action:** Facilitated workshops, documented calculations, proposed primary metric with team-specific drill-downs. **Result:** Achieved consensus in 2 weeks, 30% adoption increase due to trust in data.",
+                    metrics: "• 2 weeks to consensus<br>• 30% dashboard adoption increase<br>• Eliminated conflicting reports<br>• Single source of truth established",
+                    followUps: "• What if teams fundamentally disagree on business priorities?<br>• How do you maintain alignment over time?<br>• What role does executive sponsorship play?",
+                    googleApplication: "This experience directly applies to aligning Product, Engineering, and Marketing teams on Play Points KPIs, ensuring consistent definitions for member progression, engagement, and retention metrics."
+                },
+                {
+                    question: "Why should we hire you over someone with more Google/tech industry experience?",
+                    category: "company",
+                    difficulty: "medium",
+                    interviewer: "brian",
+                    quickAnswer: "Proven scale experience (500M+ records), rapid learning ability, fresh perspective from diverse industries, immediate impact focus.",
+                    answer: "**Three key advantages:** 1) **Scale experience** - I'm already working with Google-level data volumes (500M+ records), 2) **Diverse industry perspective** - My cannabis, retail, and logistics experience brings fresh approaches to loyalty program challenges, 3) **Proven rapid learning** - I've successfully adapted to new tech stacks and delivered results within 90 days.",
+                    starStory: "My cross-industry experience actually accelerated success. At Trulieve, I applied Home Depot's inventory optimization techniques to cannabis retail, improving customer retention 12% in 90 days. This pattern of cross-pollinating solutions would benefit Play Points analytics.",
+                    metrics: "• 500M+ records processing experience<br>• 12% retention improvement in 90 days<br>• $3.2M revenue impact<br>• 95% query performance improvement",
+                    followUps: "• How would you adapt to Google's specific tech stack?<br>• What's your learning approach for new technologies?<br>• How do you stay current with industry trends?",
+                    googleApplication: "My diverse background means I can approach Play Points challenges without industry assumptions, potentially identifying optimization opportunities that pure tech-industry experience might overlook."
+                }
+            ];
+            
+            appState.extractedData.questions = detailedQuestions;
+            updateQuestionList();
+        }
+
+        async function generateSQLChallenge() {
+            const challengeDiv = document.getElementById('sqlChallenge');
+            challengeDiv.innerHTML = `
+                <div style="padding: 1rem; background: #f8fafc; border-radius: 0.5rem; border-left: 4px solid #0ea5e9;">
+                    <div style="display: flex; align-items: center; margin-bottom: 0.5rem;">${aiBadge()}</div>
+                    <strong>Challenge:</strong> Find top 5 categories by revenue (last 30 days)
+                    <br><br>
+                    <strong>Requirements:</strong>
+                    <ul>
+                        <li>• Use window functions</li>
+                        <li>• Include unique users</li>
+                        <li>• Calculate average transaction</li>
+                    </ul>
+                </div>
+            `;
+            showToast('Challenge generated!', 'success');
+        }
+
+        async function optimizeSQL() {
+            const query = document.getElementById('sqlQuery').value.trim();
+            const feedbackDiv = document.getElementById('sqlFeedback');
+            
+            if (!query) {
+                feedbackDiv.innerHTML = `<div style="padding: 1rem; background: #fef2f2; border-radius: 0.5rem; border-left: 4px solid #ef4444; color: #dc2626;">Please enter a query to optimize.</div>`;
+                return;
+            }
+            
+            // Advanced optimization suggestions based on Google Play scale
+            const optimizations = [
+                "PARTITION BY DATE(transaction_date) for time-series queries",
+                "CLUSTER BY member_id, tier_level for member-focused queries", 
+                "Use APPROX_COUNT_DISTINCT() for large-scale estimates (220M+ members)",
+                "Replace nested subqueries with CTEs for better readability",
+                "Add LIMIT clauses to prevent accidental full table scans",
+                "Consider materialized views for dashboard aggregations",
+                "Use STRUCT for related columns to reduce I/O"
+            ];
+            
+            feedbackDiv.innerHTML = `
+                <div style="padding: 1rem; background: #f0fdf4; border-radius: 0.5rem; border-left: 4px solid #10b981;">
+                    <div style="display: flex; align-items: center; margin-bottom: 0.5rem;">${aiBadge()}</div>
+                    <strong>🚀 BigQuery Optimizations for Google Play Scale:</strong>
+                    <ul style="margin: 0.5rem 0; padding-left: 1rem;">
+                        ${optimizations.slice(0, 4).map(opt => `<li style="margin: 0.25rem 0;">• ${opt}</li>`).join('')}
+                    </ul>
+                    <div style="margin-top: 1rem; padding: 0.75rem; background: #ecfdf5; border-radius: 0.375rem;">
+                        <strong style="color: #059669;">💡 Pro Tip:</strong> For Play Points queries handling 220M+ members, always consider partitioning and clustering strategies first.
+                    </div>
+                </div>
+            `;
+            showToast('Query analyzed!', 'success');
+        }
+
+        // Load specific interview scenarios
+        function loadScenario(scenarioType) {
+            const detailsDiv = document.getElementById('scenarioDetails');
+            const scenarios = {
+                churn: {
+                    title: "🚨 Churn Investigation: 15% Spike in Gold Tier Members",
+                    context: "Nikki's scenario: 'We've noticed a 15% increase in Gold tier member churn over the past month. How would you investigate?'",
+                    challenge: `WITH churn_analysis AS (
+  SELECT 
+    member_id,
+    tier_level,
+    DATE_DIFF(CURRENT_DATE(), last_activity, DAY) as days_inactive,
+    points_velocity_30d / NULLIF(points_velocity_90d, 0) as velocity_decline,
+    LAG(tier_level) OVER (PARTITION BY member_id ORDER BY activity_date) as previous_tier
+  FROM member_activity
+  WHERE tier_level = 'Gold' 
+    AND DATE_DIFF(CURRENT_DATE(), last_activity, DAY) > 30
+)
+SELECT 
+  tier_level,
+  COUNT(*) as at_risk_members,
+  AVG(days_inactive) as avg_inactive_days,
+  COUNTIF(velocity_decline < 0.5) as declining_engagement
+FROM churn_analysis
+GROUP BY tier_level;`,
+                    approach: [
+                        "1. Segment churned vs retained Gold members",
+                        "2. Analyze point earning/redemption patterns",
+                        "3. Check for app store policy changes",
+                        "4. Build predictive model for at-risk identification"
+                    ]
+                },
+                progression: {
+                    title: "📈 Tier Progression Analysis: Gold→Platinum Gap",
+                    context: "Key business challenge: Gold members (600-2,999 pts) struggle with 5x jump to Platinum (3,000+ pts)",
+                    challenge: `WITH progression_analysis AS (
+  SELECT 
+    member_id,
+    tier_level,
+    total_points,
+    CASE 
+      WHEN tier_level = 'Gold' AND total_points > 2500 THEN 'High_Potential'
+      WHEN tier_level = 'Gold' AND total_points > 2000 THEN 'Medium_Potential'
+      ELSE 'Standard'
+    END as progression_segment,
+    SUM(points_earned) OVER (
+      PARTITION BY member_id 
+      ORDER BY transaction_date 
+      ROWS BETWEEN 30 PRECEDING AND CURRENT ROW
+    ) as rolling_30d_velocity
+  FROM play_points_members m
+  JOIN play_points_transactions t ON m.member_id = t.member_id
+  WHERE tier_level = 'Gold'
+)
+SELECT 
+  progression_segment,
+  COUNT(*) as member_count,
+  AVG(rolling_30d_velocity) as avg_earning_velocity,
+  PERCENT_RANK() OVER (ORDER BY AVG(total_points)) as percentile_rank
+FROM progression_analysis
+GROUP BY progression_segment;`,
+                    approach: [
+                        "1. Identify members 70-80% toward Platinum threshold",
+                        "2. Analyze earning velocity patterns",
+                        "3. Design A/B tests for intervention strategies",
+                        "4. Expected outcome: 15-20% increase in Platinum progression"
+                    ]
+                },
+                optimization: {
+                    title: "⚡ Query Performance: 10min → 30sec Optimization",
+                    context: "Home Depot experience: Optimized BigQuery queries processing 500M+ SKU records",
+                    challenge: `-- BEFORE: Slow query
+SELECT 
+  m.tier_level,
+  COUNT(*) as member_count,
+  SUM(t.points_earned) as total_points
+FROM play_points_members m
+JOIN play_points_transactions t ON m.member_id = t.member_id
+WHERE t.transaction_date >= '2024-01-01'
+GROUP BY m.tier_level;
+
+-- AFTER: Optimized with partitioning and clustering
+CREATE TABLE play_points_fact
+PARTITION BY DATE(transaction_date)
+CLUSTER BY member_id, tier_level AS
+SELECT 
+  member_id,
+  tier_level,
+  transaction_date,
+  points_earned,
+  -- Pre-compute commonly used aggregations
+  SUM(points_earned) OVER (
+    PARTITION BY member_id 
+    ORDER BY transaction_date
+  ) as cumulative_points
+FROM raw_transactions;`,
+                    approach: [
+                        "1. PARTITION BY DATE for time-series queries",
+                        "2. CLUSTER BY frequently filtered columns", 
+                        "3. Use materialized views for dashboards",
+                        "4. Replace subqueries with CTEs"
+                    ]
+                },
+                segmentation: {
+                    title: "🎯 Member Behavioral Segmentation",
+                    context: "Trulieve experience: Used ML clustering to improve retention 12% ($3.2M impact)",
+                    challenge: `-- BigQuery ML clustering for member segmentation
+CREATE OR REPLACE MODEL play_points_segments
+OPTIONS(model_type='kmeans', num_clusters=8) AS
+SELECT 
+  -- Engagement features
+  DATE_DIFF(CURRENT_DATE(), last_activity, DAY) as recency,
+  AVG(points_earned) as avg_transaction_value,
+  COUNT(DISTINCT DATE(transaction_date)) as frequency,
+  -- Behavioral features
+  COUNTIF(app_category = 'Games') / COUNT(*) as gaming_preference,
+  COUNTIF(points_redeemed > 0) / COUNT(*) as redemption_rate,
+  -- Tier progression velocity
+  (total_points - tier_min_points) / (tier_max_points - tier_min_points) as tier_progress
+FROM play_points_transactions t
+JOIN play_points_members m ON t.member_id = m.member_id
+WHERE transaction_date >= DATE_SUB(CURRENT_DATE(), INTERVAL 180 DAY)
+GROUP BY m.member_id, total_points, tier_min_points, tier_max_points, last_activity;`,
+                    approach: [
+                        "1. Extract behavioral features (RFM analysis)",
+                        "2. Use BigQuery ML K-means clustering",
+                        "3. Create 8 distinct member personas",
+                        "4. Design persona-specific interventions"
+                    ]
+                }
+            };
+            
+            const scenario = scenarios[scenarioType];
+            detailsDiv.style.display = 'block';
+            detailsDiv.innerHTML = `
+                <div style="border-left: 4px solid #3b82f6; padding-left: 1rem;">
+                    <h4 style="color: #1e40af; margin-bottom: 0.5rem;">${scenario.title}</h4>
+                    <p style="color: #64748b; margin-bottom: 1rem; font-style: italic;">${scenario.context}</p>
+                    
+                    <div style="margin-bottom: 1rem;">
+                        <strong style="color: #059669;">Approach:</strong>
+                        <ul style="margin: 0.5rem 0; padding-left: 1rem; color: #374151;">
+                            ${scenario.approach.map(step => `<li style="margin: 0.25rem 0;">${step}</li>`).join('')}
+                        </ul>
+                    </div>
+                    
+                    <button class="btn btn-primary" onclick="copySQLExample('${scenarioType}')">
+                        📋 Copy SQL to Editor
+                    </button>
+                </div>
+            `;
+        }
+
+        function copySQLExample(scenarioType) {
+            const scenarios = {
+                churn: `WITH churn_analysis AS (
+  SELECT 
+    member_id,
+    tier_level,
+    DATE_DIFF(CURRENT_DATE(), last_activity, DAY) as days_inactive,
+    points_velocity_30d / NULLIF(points_velocity_90d, 0) as velocity_decline,
+    LAG(tier_level) OVER (PARTITION BY member_id ORDER BY activity_date) as previous_tier
+  FROM member_activity
+  WHERE tier_level = 'Gold' 
+    AND DATE_DIFF(CURRENT_DATE(), last_activity, DAY) > 30
+)
+SELECT 
+  tier_level,
+  COUNT(*) as at_risk_members,
+  AVG(days_inactive) as avg_inactive_days,
+  COUNTIF(velocity_decline < 0.5) as declining_engagement
+FROM churn_analysis
+GROUP BY tier_level;`,
+                progression: `WITH progression_analysis AS (
+  SELECT 
+    member_id,
+    tier_level,
+    total_points,
+    CASE 
+      WHEN tier_level = 'Gold' AND total_points > 2500 THEN 'High_Potential'
+      WHEN tier_level = 'Gold' AND total_points > 2000 THEN 'Medium_Potential'
+      ELSE 'Standard'
+    END as progression_segment,
+    SUM(points_earned) OVER (
+      PARTITION BY member_id 
+      ORDER BY transaction_date 
+      ROWS BETWEEN 30 PRECEDING AND CURRENT ROW
+    ) as rolling_30d_velocity
+  FROM play_points_members m
+  JOIN play_points_transactions t ON m.member_id = t.member_id
+  WHERE tier_level = 'Gold'
+)
+SELECT 
+  progression_segment,
+  COUNT(*) as member_count,
+  AVG(rolling_30d_velocity) as avg_earning_velocity,
+  PERCENT_RANK() OVER (ORDER BY AVG(total_points)) as percentile_rank
+FROM progression_analysis
+GROUP BY progression_segment;`,
+                optimization: `-- Optimized with partitioning and clustering
+CREATE TABLE play_points_fact
+PARTITION BY DATE(transaction_date)
+CLUSTER BY member_id, tier_level AS
+SELECT 
+  member_id,
+  tier_level,
+  transaction_date,
+  points_earned,
+  -- Pre-compute commonly used aggregations
+  SUM(points_earned) OVER (
+    PARTITION BY member_id 
+    ORDER BY transaction_date
+  ) as cumulative_points
+FROM raw_transactions;`,
+                segmentation: `-- BigQuery ML clustering for member segmentation
+CREATE OR REPLACE MODEL play_points_segments
+OPTIONS(model_type='kmeans', num_clusters=8) AS
+SELECT 
+  -- Engagement features
+  DATE_DIFF(CURRENT_DATE(), last_activity, DAY) as recency,
+  AVG(points_earned) as avg_transaction_value,
+  COUNT(DISTINCT DATE(transaction_date)) as frequency,
+  -- Behavioral features
+  COUNTIF(app_category = 'Games') / COUNT(*) as gaming_preference,
+  COUNTIF(points_redeemed > 0) / COUNT(*) as redemption_rate,
+  -- Tier progression velocity
+  (total_points - tier_min_points) / (tier_max_points - tier_min_points) as tier_progress
+FROM play_points_transactions t
+JOIN play_points_members m ON t.member_id = m.member_id
+WHERE transaction_date >= DATE_SUB(CURRENT_DATE(), INTERVAL 180 DAY)
+GROUP BY m.member_id, total_points, tier_min_points, tier_max_points, last_activity;`
+            };
+            
+            document.getElementById('sqlQuery').value = scenarios[scenarioType] || '';
+            showToast('SQL example copied to editor!', 'success');
+        }
+
+        function validateSQLSolution() {
+            const query = document.getElementById('sqlQuery').value.trim();
+            const feedbackDiv = document.getElementById('sqlFeedback');
+            
+            if (!query) {
+                feedbackDiv.innerHTML = `<div style="padding: 1rem; background: #fef2f2; border-radius: 0.5rem; border-left: 4px solid #ef4444; color: #dc2626;">Please enter a SQL query to validate.</div>`;
+                return;
+            }
+            
+            // Check for key Google Play concepts and best practices
+            const checks = [
+                { pattern: /WITH\s+\w+\s+AS/i, message: "✅ Uses CTEs for readability", points: 2 },
+                { pattern: /PARTITION BY|CLUSTER BY/i, message: "✅ Includes partitioning/clustering", points: 3 },
+                { pattern: /OVER\s*\(/i, message: "✅ Uses window functions", points: 2 },
+                { pattern: /tier_level|play_points/i, message: "✅ References Google Play Points schema", points: 1 },
+                { pattern: /DATE_DIFF|DATE_SUB/i, message: "✅ Proper date handling", points: 1 },
+                { pattern: /COUNT|SUM|AVG/i, message: "✅ Includes aggregations", points: 1 }
+            ];
+            
+            const passed = checks.filter(check => check.pattern.test(query));
+            const totalPoints = passed.reduce((sum, check) => sum + check.points, 0);
+            
+            let feedback = `
+                <div style="padding: 1rem; background: #f0fdf4; border-radius: 0.5rem; border-left: 4px solid #10b981;">
+                    <div style="display: flex; align-items: center; margin-bottom: 0.5rem;">${aiBadge()}</div>
+                    <div style="display: flex; justify-content: between; align-items: center; margin-bottom: 1rem;">
+                        <strong>📊 Solution Analysis</strong>
+                        <span style="background: #059669; color: white; padding: 0.25rem 0.5rem; border-radius: 0.25rem; font-size: 0.875rem;">Score: ${totalPoints}/10</span>
+                    </div>
+                    
+                    <div style="margin-bottom: 1rem;">
+                        ${passed.map(check => `<div style="color: #059669; margin: 0.25rem 0;">${check.message}</div>`).join('')}
+                    </div>
+            `;
+            
+            if (totalPoints >= 7) {
+                feedback += `<div style="padding: 0.75rem; background: #dcfce7; border-radius: 0.375rem; color: #166534;">
+                    <strong>🎉 Excellent!</strong> This query demonstrates strong BigQuery skills suitable for Google Play Points analytics.
+                </div>`;
+            } else if (totalPoints >= 4) {
+                feedback += `<div style="padding: 0.75rem; background: #fef3c7; border-radius: 0.375rem; color: #92400e;">
+                    <strong>👍 Good!</strong> Consider adding window functions and partitioning for Google scale.
+                </div>`;
+            } else {
+                feedback += `<div style="padding: 0.75rem; background: #fee2e2; border-radius: 0.375rem; color: #991b1b;">
+                    <strong>💡 Needs improvement:</strong> Add CTEs, window functions, and proper BigQuery optimization techniques.
+                </div>`;
+            }
+            
+            feedback += '</div>';
+            feedbackDiv.innerHTML = feedback;
+            showToast('Solution validated!', 'success');
+        }
+
+        function showExampleSolutions() {
+            const examplesDiv = document.getElementById('exampleSolutions');
+            const isVisible = examplesDiv.style.display !== 'none';
+            
+            if (isVisible) {
+                examplesDiv.style.display = 'none';
+                return;
+            }
+            
+            examplesDiv.style.display = 'block';
+            examplesDiv.innerHTML = `
+                <div style="background: #1e293b; color: #f1f5f9; padding: 1rem; border-radius: 0.5rem; font-family: 'Courier New', monospace; font-size: 0.875rem;">
+                    <div style="color: #10b981; margin-bottom: 0.5rem;">-- Example: Member Tier Progression Analysis</div>
+                    <div style="color: #64748b;">WITH tier_transitions AS (</div>
+                    <div style="padding-left: 1rem;">
+                        <div>member_id,</div>
+                        <div>current_tier,</div>
+                        <div style="color: #fbbf24;">LAG(tier_level) OVER (</div>
+                        <div style="padding-left: 1rem; color: #fbbf24;">PARTITION BY member_id ORDER BY tier_change_date</div>
+                        <div style="color: #fbbf24;">) as previous_tier,</div>
+                        <div>tier_change_date</div>
+                    </div>
+                    <div style="color: #64748b;">FROM member_tier_history</div>
+                    <div style="color: #64748b;">WHERE tier_change_date >= DATE_SUB(CURRENT_DATE(), INTERVAL 90 DAY)</div>
+                    <div style="color: #64748b;">)</div>
+                    <div style="margin: 0.5rem 0; color: #64748b;">SELECT</div>
+                    <div style="padding-left: 1rem;">
+                        <div>CONCAT(previous_tier, ' → ', current_tier) as transition,</div>
+                        <div>COUNT(*) as transition_count,</div>
+                        <div style="color: #fbbf24;">PERCENT_RANK() OVER (ORDER BY COUNT(*)) as transition_percentile</div>
+                    </div>
+                    <div style="color: #64748b;">FROM tier_transitions</div>
+                    <div style="color: #64748b;">WHERE previous_tier IS NOT NULL</div>
+                    <div style="color: #64748b;">GROUP BY previous_tier, current_tier;</div>
+                </div>
+                
+                <button class="btn btn-secondary" style="width: 100%; margin-top: 0.5rem;" onclick="copySQLExample('example1')">
+                    📋 Copy This Example
+                </button>
+            `;
+        }
+
+        async function generateRebuttal() {
+            const question = document.getElementById('toughQuestion').value.trim();
+            const strategyDiv = document.getElementById('rebuttalStrategy');
+            
+            if (!question) {
+                showToast('Please enter a tough interview question first', 'warning');
+                return;
+            }
+            
+            // Extract actual strengths and stories from loaded content
+            const loadedStories = appState.extractedData.stories || [];
+            const loadedStrengths = appState.extractedData.strengths || [];
+            const companyIntel = appState.extractedData.companyIntel || '';
+            
+            // Build dynamic strengths from actual STAR stories and loaded content
+            const yourStrengths = {
+                scale: loadedStories.find(s => s.title?.includes('BigQuery') || s.title?.includes('Scale'))?.result || '500M+ SKU records at Home Depot, 100M+ daily transactions at Trulieve',
+                impact: loadedStories.find(s => s.result?.includes('$') || s.result?.includes('%'))?.result?.match(/(\$[\d.]+[MK]|\d+%[^,]*)/g)?.join(', ') || '$3.2M retention improvement, 12% customer acquisition',
+                technical: loadedStories.find(s => s.title?.includes('BigQuery') || s.title?.includes('SQL'))?.result || '95% query optimization (10min→30sec), 99.9% pipeline uptime',
+                stakeholders: loadedStories.find(s => s.title?.includes('Dashboard') || s.title?.includes('Stakeholder'))?.result || '200+ stakeholders enabled, C-level presentations, 30% adoption increase',
+                skills: loadedStrengths.slice(0, 3).join(', ') || '8+ years advanced SQL, Snowflake/cloud expertise, statistical analysis'
+            };
+            
+            // Analyze question for key concerns and craft intelligent response
+            const questionLower = question.toLowerCase();
+            let strategy = '';
+            let approach = '';
+            let evidence = '';
+            let bridge = '';
+            let counterPoints = [];
+            
+            // Deep analysis of question intent
+            const concerns = {
+                experience: questionLower.includes('experience') || questionLower.includes('years') || questionLower.includes('senior'),
+                industry: questionLower.includes('industry') || questionLower.includes('tech') || questionLower.includes('google') || questionLower.includes('platform'),
+                technical: questionLower.includes('bigquery') || questionLower.includes('gcp') || questionLower.includes('technical') || questionLower.includes('sql'),
+                scale: questionLower.includes('scale') || questionLower.includes('billion') || questionLower.includes('performance'),
+                team: questionLower.includes('team') || questionLower.includes('collaborate') || questionLower.includes('stakeholder'),
+                culture: questionLower.includes('culture') || questionLower.includes('fit') || questionLower.includes('google'),
+                contractor: questionLower.includes('contractor') || questionLower.includes('permanent') || questionLower.includes('fte'),
+                gap: questionLower.includes('weakness') || questionLower.includes('gap') || questionLower.includes('lack') || questionLower.includes('without'),
+                competition: questionLower.includes('other') || questionLower.includes('candidate') || questionLower.includes('why you') || questionLower.includes('instead'),
+                failure: questionLower.includes('fail') || questionLower.includes('mistake') || questionLower.includes('wrong') || questionLower.includes('difficult')
+            };
+            
+            // Count concerns to understand question complexity
+            const concernCount = Object.values(concerns).filter(v => v).length;
+            
+            // Multi-layered response based on concerns
+            if (concerns.industry && (concerns.experience || concerns.gap)) {
+                approach = 'Reframe industry difference as advantage + prove transferable value';
+                evidence = `${yourStrengths.scale} matching Google scale`;
+                bridge = 'Analytics challenges are universal at scale - member segmentation = customer segmentation';
+                counterPoints = [
+                    'Fresh perspective valuable for Year of Efficiency initiatives',
+                    'Cross-industry best practices bring innovation',
+                    'Retail/healthcare analytics complexity rivals tech platforms'
+                ];
+                strategy = `**"That's a fair observation about my non-tech background. However, I see this as a strategic advantage for three reasons: First, I've already solved Google-scale problems - optimizing 500M+ SKU records at Home Depot directly parallels Play Points' billion-transaction challenges. Second, my retail and healthcare experience brings fresh perspectives on customer behavior that pure tech backgrounds might miss - my retention analysis improving metrics by 12% worth $3.2M proves this. Third, the analytical rigor required for healthcare compliance and retail inventory actually exceeds many tech scenarios. The core challenge isn't the industry - it's the scale and complexity, which I've mastered."**`;
+            }
+            else if (concerns.technical && (concerns.gap || concerns.experience)) {
+                approach = 'Demonstrate technical depth + fast learning curve';
+                evidence = `${yourStrengths.technical} proves optimization mindset`;
+                bridge = 'Snowflake→BigQuery transition is syntax, not concepts';
+                counterPoints = [
+                    'Cloud-native SQL platforms share 80% architecture',
+                    'Optimization principles universal across platforms',
+                    'Track record of rapid tool adoption'
+                ];
+                strategy = `**"While I haven't used BigQuery specifically, my Snowflake expertise translates directly - both are columnar, cloud-native SQL platforms. The concepts I've mastered - partitioning, clustering, window functions, cost optimization - are identical. My track record proves this: I achieved 95% query optimization reducing processing from 10 minutes to 30 seconds, built pipelines with 99.9% uptime, and consistently adopt new tools rapidly. The difference between Snowflake and BigQuery is syntax, not capability. Given my deep SQL foundation and optimization mindset, I estimate a 2-week ramp to full productivity on BigQuery, not months."**`;
+            }
+            else if (concerns.competition) {
+                approach = 'Differentiate with unique value proposition';
+                evidence = 'Combination of scale + stakeholder + business impact';
+                bridge = 'Position as the candidate who delivers both technical excellence AND business value';
+                counterPoints = [
+                    'Proven at Google scale already',
+                    'Business impact quantification expertise',
+                    'Stakeholder enablement differentiator'
+                ];
+                const relevantStory = loadedStories.find(s => s.title?.includes('Segmentation') || s.title?.includes('Pipeline') || s.result?.includes('$'));
+                const storyExample = relevantStory ? `For example, ${relevantStory.title} - ${relevantStory.result?.substring(0, 100)}...` : '';
+                strategy = `**"What differentiates me is the rare combination of three critical capabilities: First, I've already operated at Google scale - ${yourStrengths.scale} - so there's no learning curve on data volume challenges. Second, I don't just build analytics, I drive adoption - ${yourStrengths.stakeholders} by focusing on user needs. Third, I quantify business impact in dollars - ${yourStrengths.impact} - which aligns with Google's Year of Efficiency focus. ${storyExample} While others might excel in one area, I bring the complete package: technical depth, stakeholder success, and measurable business value."**`;
+            }
+            else if (concerns.contractor) {
+                approach = 'Reposition contractor as strategic advantage';
+                evidence = 'Immediate availability + prove value quickly + FTE interest';
+                bridge = 'Contractor allows rapid value delivery without lengthy notice periods';
+                counterPoints = [
+                    'Available immediately vs 2-3 month notice for FTEs',
+                    'Motivated to prove value for conversion',
+                    'Same quality commitment regardless of status'
+                ];
+                const contractorExample = loadedStories.find(s => s.title?.includes('Trulieve') || s.result?.includes('$'))?.result || '$3.2M impact at Trulieve';
+                strategy = `**"Actually, the contractor structure benefits both of us. I'm available immediately - no 2-3 month notice period delaying your Play Points initiatives. This arrangement lets me prove my value quickly while you evaluate cultural fit without long-term commitment. My track record shows I deliver the same quality regardless of employment type - ${contractorExample}. I'm genuinely interested in FTE conversion as Google Play's scale and AI/ML roadmap represent my ideal long-term opportunity. Think of it as an extended working interview where I can contribute immediately to your Q4 goals."**`;
+            }
+            else if (concerns.failure) {
+                approach = 'Show learning mindset + resilience + growth';
+                evidence = 'Specific failure that led to process improvement';
+                bridge = 'Failure created systematic improvements preventing future issues';
+                counterPoints = [
+                    'Failure led to documented process improvements',
+                    'Created preventive measures now standard practice',
+                    'Demonstrates ownership and growth mindset'
+                ];
+                strategy = `**"I'll share a significant learning experience. At Home Depot, I initially underestimated the complexity of integrating multiple data sources for a supply chain dashboard. My first version had data discrepancies that weren't caught until executive review. I took full ownership, worked through the weekend to fix it, but more importantly, I created a comprehensive data validation framework that became the team standard. This 'failure' led to implementing automated testing that prevented similar issues across 50+ future dashboards. The experience taught me to always build validation into the initial design, not as an afterthought. This systematic approach to preventing errors would be valuable for Play Points' data integrity."**`;
+            }
+            else if (concerns.culture || concerns.team) {
+                approach = 'Demonstrate collaborative success + cultural alignment';
+                evidence = yourStrengths.stakeholders + ' proves collaboration skills';
+                bridge = "Your stakeholder-first approach matches Google's user focus";
+                counterPoints = [
+                    'Cross-functional success with diverse stakeholders',
+                    'Data democratization philosophy',
+                    'Continuous learning mindset'
+                ];
+                strategy = `**"My collaborative approach aligns perfectly with Google's culture. I believe in democratizing data - at Home Depot, I didn't just build dashboards, I enabled 200+ stakeholders to self-serve, increasing adoption by 30%. I've successfully partnered with everyone from warehouse workers to C-suite executives, adapting my communication style to each audience. My Lean Six Sigma training emphasized cross-functional collaboration, which I've applied in every role. Google's emphasis on psychological safety and innovation matches my approach - I encourage questions, share knowledge openly, and see colleagues' success as my success. The Play Points team's mix of technical and business stakeholders is exactly the environment where I thrive."**`;
+            }
+            else if (concerns.scale) {
+                approach = 'Prove scale experience + optimization expertise';
+                evidence = yourStrengths.scale;
+                bridge = 'Your scale experience eliminates the usual learning curve';
+                counterPoints = [
+                    'Already comfortable with billion-row datasets',
+                    'Proven optimization reducing processing 95%',
+                    'Cost-conscious approach to large-scale analytics'
+                ];
+                const scaleStory = loadedStories.find(s => s.title?.includes('BigQuery') || s.title?.includes('Scale') || s.result?.includes('records'));
+                const specificOptimization = scaleStory?.result?.match(/(\d+%[^,]*|10 minutes to 30 seconds|80% reduction)/g)?.join(', ') || '95% performance improvements reducing query time from 10 minutes to 30 seconds';
+                strategy = `**"Scale is actually my comfort zone. ${yourStrengths.scale}. I don't just handle large datasets - I optimize them, achieving ${specificOptimization}. I understand the cost implications of scanning billions of rows and consistently implement partitioning, clustering, and incremental processing strategies. For Play Points' 220M+ members and billions of daily events, I'd immediately apply these optimization patterns. There's no scale intimidation factor - I've been working at this magnitude for years."**`;
+            }
+            else if (concernCount === 0 || concernCount > 3) {
+                // Complex or vague question - provide structured framework
+                approach = 'Use STAR structure to address comprehensively';
+                evidence = 'Multiple proof points from your background';
+                bridge = 'Connect each element back to Play Points needs';
+                counterPoints = [
+                    'Address both technical and business aspects',
+                    'Show progression and growth',
+                    'Demonstrate immediate value potential'
+                ];
+                const comprehensiveExample = loadedStories.length > 0 ? loadedStories[0] : null;
+                const situationExample = comprehensiveExample ? comprehensiveExample.situation?.substring(0, 80) + '...' : 'similar challenges in previous roles';
+                const resultExample = comprehensiveExample ? comprehensiveExample.result : yourStrengths.impact;
+                strategy = `**"Let me address that comprehensively. [Situation] ${situationExample} - the question touches on important considerations for this role. [Task] My goal is to demonstrate not just capability, but exceptional fit for Play Points analytics. [Action] Looking at my background: I've managed Google-scale data (${yourStrengths.scale}), delivered quantified business impact (${resultExample}), and enabled stakeholders through intuitive analytics. Each of these directly applies to Play Points' challenges with 220M+ members. [Result] The outcome is clear: I can contribute immediately to your analytics needs while bringing fresh perspectives from cross-industry experience. The upcoming AI/ML integration particularly excites me as it combines my expertise with Play Points' personalization goals."**`;
+            }
+            else {
+                // Intelligent response based on question keywords
+                approach = 'Analyze question keywords + provide targeted evidence + show enthusiasm';
+                
+                let relevantStrength = '';
+                let specificApplication = '';
+                
+                if (questionLower.includes('data') || questionLower.includes('analytics')) {
+                    relevantStrength = yourStrengths.scale;
+                    specificApplication = "analyzing Play Points' 220M+ member behaviors to optimize tier progression";
+                } else if (questionLower.includes('stakeholder') || questionLower.includes('team') || questionLower.includes('management')) {
+                    relevantStrength = yourStrengths.stakeholders;
+                    specificApplication = "collaborating across Product, Engineering, and Marketing teams for Play Points optimization";
+                } else if (questionLower.includes('sql') || questionLower.includes('query') || questionLower.includes('performance')) {
+                    relevantStrength = yourStrengths.technical;
+                    specificApplication = "optimizing BigQuery performance for billion-row Play Store transaction datasets";
+                } else if (questionLower.includes('impact') || questionLower.includes('business') || questionLower.includes('value')) {
+                    relevantStrength = yourStrengths.impact;
+                    specificApplication = "driving measurable business outcomes through Play Points analytics";
+                } else {
+                    relevantStrength = yourStrengths.skills;
+                    specificApplication = "contributing immediately to Google Play's data challenges";
+                }
+                
+                evidence = relevantStrength;
+                bridge = `Specific application to ${specificApplication}`;
+                strategy = `**"${question.includes('?') ? 'To answer directly:' : 'Let me address that:'} My experience specifically demonstrates this capability. ${relevantStrength} directly applies to ${specificApplication}. What excites me most about this role is the opportunity to leverage these proven skills at Google's scale while contributing to the upcoming AI/ML integration. Would you like me to elaborate on how I'd approach this challenge in the Play Points context?"**`;
+            }
+            
+            strategyDiv.innerHTML = `
+                <div style="padding: 1.5rem; background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%); border-radius: 0.75rem; border-left: 4px solid #f59e0b;">
+                    <div style="display: flex; align-items: center; margin-bottom: 1rem;">
+                        <h3 style="color: #1e293b; margin: 0; margin-right: 0.5rem;">⚡ Intelligent Rebuttal Strategy</h3>
+                        ${aiBadge()}
+                    </div>
+                    
+                    <div style="background: white; padding: 1rem; border-radius: 0.5rem; margin-bottom: 1rem;">
+                        <h4 style="color: #f59e0b; margin-bottom: 0.5rem;">❓ Your Question:</h4>
+                        <p style="font-style: italic; color: #64748b;">"${question}"</p>
+                    </div>
+                    
+                    <div style="background: white; padding: 1rem; border-radius: 0.5rem; margin-bottom: 1rem;">
+                        <h4 style="color: #f59e0b; margin-bottom: 0.75rem;">🎯 Strategic Approach:</h4>
+                        <p style="margin-bottom: 0.5rem;"><strong>Method:</strong> ${approach}</p>
+                        <p style="margin-bottom: 0.5rem;"><strong>Evidence to Use:</strong> ${evidence}</p>
+                        <p><strong>Bridge to Role:</strong> ${bridge}</p>
+                    </div>
+                    
+                    ${counterPoints.length > 0 ? `
+                    <div style="background: white; padding: 1rem; border-radius: 0.5rem; margin-bottom: 1rem;">
+                        <h4 style="color: #8b5cf6; margin-bottom: 0.75rem;">🔄 Counter Points to Emphasize:</h4>
+                        <ul style="margin: 0; padding-left: 1rem;">
+                            ${counterPoints.map(point => `<li style="margin-bottom: 0.25rem;">${point}</li>`).join('')}
+                        </ul>
+                    </div>
+                    ` : ''}
+                    
+                    <div style="background: #f8fafc; padding: 1rem; border-radius: 0.5rem; border-left: 3px solid #22c55e;">
+                        <h4 style="color: #22c55e; margin-bottom: 0.75rem;">💬 Tailored Response:</h4>
+                        <p style="line-height: 1.6;">${strategy}</p>
+                    </div>
+                    
+                    <div style="background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%); color: white; padding: 1rem; border-radius: 0.5rem; margin-top: 1rem;">
+                        <h4 style="color: white; margin-bottom: 0.5rem;">💡 Delivery Excellence Tips:</h4>
+                        <ul style="margin: 0; padding-left: 1rem;">
+                            <li>Pause confidently before responding to show thoughtfulness</li>
+                            <li>Use your specific metrics: 500M+ records, $3.2M impact, 95% optimization</li>
+                            <li>Reference Play Points context: 220M+ members, $11.63B quarterly revenue</li>
+                            <li>Close with a question to engage the interviewer</li>
+                        </ul>
+                    </div>
+                </div>
+            `;
+            
+            showToast('Tailored rebuttal strategy generated!', 'success');
+        }
+
+        async function generateCandidateQuestions() {
+            const questionsDiv = document.getElementById('candidateQuestions');
+            const allPanelistQuestions = appState.extractedData.panelistQuestions || {};
+            
+            let questionsHTML = '';
+            
+            // Show questions for all panelists if available
+            if (Object.keys(allPanelistQuestions).length > 0) {
+                Object.entries(allPanelistQuestions).forEach(([panelist, questions]) => {
+                    questionsHTML += `
+                        <div style="margin-bottom: 1.5rem;">
+                            <h4 style="font-weight: 600; color: #4f46e5; margin-bottom: 0.5rem;">For ${panelist}:</h4>
+                            <ul style="margin-left: 1rem;">
+                                ${questions.map(q => `<li style="margin-bottom: 0.5rem;">${q}</li>`).join('')}
+                            </ul>
+                        </div>
+                    `;
+                });
+                
+                questionsDiv.innerHTML = `
+                    <div style="padding: 1rem; background: #f0f9ff; border-radius: 0.5rem; border-left: 4px solid #0ea5e9;">
+                        <div style="display: flex; align-items: center; margin-bottom: 1rem;">${aiBadge()}</div>
+                        ${questionsHTML}
+                    </div>
+                `;
+            } else {
+                // Fallback questions if extraction didn't work
+                questionsDiv.innerHTML = `
+                    <div style="padding: 1rem; background: #f0f9ff; border-radius: 0.5rem; border-left: 4px solid #0ea5e9;">
+                        <div style="display: flex; align-items: center; margin-bottom: 1rem;">${aiBadge()}</div>
+                        <h4 style="font-weight: 600; color: #4f46e5; margin-bottom: 0.5rem;">Strategic Questions to Ask:</h4>
+                        <ul style="margin-left: 1rem;">
+                            <li style="margin-bottom: 0.5rem;">With Play Points serving 220M+ members globally, what are the biggest data challenges you're facing?</li>
+                            <li style="margin-bottom: 0.5rem;">What specific AI/ML initiatives are planned for Play Points personalization in the next 6-12 months?</li>
+                            <li style="margin-bottom: 0.5rem;">How does the team approach balancing technical debt with rapid feature development?</li>
+                            <li style="margin-bottom: 0.5rem;">What opportunities exist for contractors to transition to FTE roles?</li>
+                            <li style="margin-bottom: 0.5rem;">What aspect of the Play Points analytics roadmap excites the team most?</li>
+                        </ul>
+                    </div>
+                `;
+            }
+            showToast('Questions generated!', 'success');
+        }
+
+        async function generatePlan() {
+            const planDiv = document.getElementById('dayPlan');
+            planDiv.innerHTML = `
+                <div style="padding: 2rem; background: linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%); border-radius: 1rem;">
+                    <div style="display: flex; align-items: center; margin-bottom: 1.5rem;">
+                        <h2 style="color: #1e293b; margin: 0; font-size: 1.5rem;">🚀 Strategic 30-60-90 Day Execution Plan</h2>
+                        ${aiBadge()}
+                    </div>
+                    <div style="color: #64748b; margin-bottom: 2rem; padding: 1rem; background: white; border-radius: 0.5rem; border-left: 4px solid #4f46e5;">
+                        <strong>Context:</strong> Google Play BI/Data Analyst role supporting 220M+ Play Points members and $11.63B quarterly revenue with upcoming AI/ML integration expansion.
+                    </div>
+
+                    <!-- DAYS 1-30: Foundation & Learning -->
+                    <div style="margin-bottom: 2.5rem; background: white; padding: 1.5rem; border-radius: 0.75rem; border-left: 5px solid #22c55e;">
+                        <div style="display: flex; align-items: center; margin-bottom: 1rem;">
+                            <div style="background: #22c55e; color: white; padding: 0.5rem 1rem; border-radius: 1.5rem; font-weight: 600; margin-right: 1rem;">Days 1-30</div>
+                            <h3 style="color: #22c55e; margin: 0; font-size: 1.25rem;">🎯 Foundation & Technical Onboarding</h3>
+                        </div>
+                        
+                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; margin-top: 1rem;">
+                            <div>
+                                <h4 style="color: #1e293b; font-size: 1rem; margin-bottom: 0.75rem;">📚 Technical Mastery</h4>
+                                <ul style="margin: 0; padding-left: 1rem; line-height: 1.6;">
+                                    <li><strong>BigQuery Deep Dive:</strong> Master Google-specific SQL optimizations for billion-row datasets</li>
+                                    <li><strong>PLX Dashboard Tool:</strong> Learn internal visualization platform (similar to Power BI/Tableau)</li>
+                                    <li><strong>Looker Integration:</strong> Understand LookML modeling and business logic definition</li>
+                                    <li><strong>Play Points Data Schema:</strong> Map loyalty program data architecture (Bronze→Diamond tiers)</li>
+                                    <li><strong>BigQuery ML Foundations:</strong> Prepare for upcoming AI/ML expansion (6-12 month timeline)</li>
+                                </ul>
+                            </div>
+                            <div>
+                                <h4 style="color: #1e293b; font-size: 1rem; margin-bottom: 0.75rem;">🤝 Stakeholder Network</h4>
+                                <ul style="margin: 0; padding-left: 1rem; line-height: 1.6;">
+                                    <li><strong>Product Teams:</strong> Understand Play Points feature development roadmap</li>
+                                    <li><strong>Marketing Teams:</strong> Learn user acquisition and retention strategies</li>
+                                    <li><strong>Engineering Teams:</strong> Align on data pipeline architecture and infrastructure</li>
+                                    <li><strong>Finance Teams:</strong> Understand revenue reporting and forecasting requirements</li>
+                                    <li><strong>Compliance Teams:</strong> Learn regulatory requirements (Epic Games settlement, EU DMA)</li>
+                                </ul>
+                            </div>
+                        </div>
+                        
+                        <div style="background: #f0fdf4; padding: 1rem; border-radius: 0.5rem; margin-top: 1rem;">
+                            <strong>🎯 Success Metrics (30 Days):</strong> Complete BigQuery certification, deliver first data quality assessment, establish weekly stakeholder touchpoints, identify top 3 optimization opportunities
+                        </div>
+                    </div>
+
+                    <!-- DAYS 31-60: Quick Wins & Impact -->
+                    <div style="margin-bottom: 2.5rem; background: white; padding: 1.5rem; border-radius: 0.75rem; border-left: 5px solid #3b82f6;">
+                        <div style="display: flex; align-items: center; margin-bottom: 1rem;">
+                            <div style="background: #3b82f6; color: white; padding: 0.5rem 1rem; border-radius: 1.5rem; font-weight: 600; margin-right: 1rem;">Days 31-60</div>
+                            <h3 style="color: #3b82f6; margin: 0; font-size: 1.25rem;">⚡ Quick Wins & Optimization</h3>
+                        </div>
+                        
+                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; margin-top: 1rem;">
+                            <div>
+                                <h4 style="color: #1e293b; font-size: 1rem; margin-bottom: 0.75rem;">📊 Data Optimization Projects</h4>
+                                <ul style="margin: 0; padding-left: 1rem; line-height: 1.6;">
+                                    <li><strong>Gold→Platinum Progression Analysis:</strong> Diagnose stagnant tier progression (600-2,999 to 3,000+ points gap)</li>
+                                    <li><strong>Query Performance Optimization:</strong> Target 95% improvement (10min→30sec) for key reports</li>
+                                    <li><strong>Member Churn Investigation:</strong> Analyze retention patterns across 220M+ members</li>
+                                    <li><strong>Dashboard Consolidation:</strong> Streamline reporting to reduce manual effort by 80%</li>
+                                    <li><strong>Payment Optimization Support:</strong> Analyze AI-powered recommendation effectiveness</li>
+                                </ul>
+                            </div>
+                            <div>
+                                <h4 style="color: #1e293b; font-size: 1rem; margin-bottom: 0.75rem;">🚀 Strategic Deliverables</h4>
+                                <ul style="margin: 0; padding-left: 1rem; line-height: 1.6;">
+                                    <li><strong>Executive Dashboard:</strong> C-level metrics for $11.63B Play Store performance</li>
+                                    <li><strong>Tier Progression Playbook:</strong> Actionable insights for loyalty engagement</li>
+                                    <li><strong>Revenue Impact Analysis:</strong> Quantify optimization opportunities ($3.2M+ potential)</li>
+                                    <li><strong>Cross-Platform Integration:</strong> Gaming, entertainment, commerce data unification</li>
+                                    <li><strong>Stakeholder Training:</strong> Enable 30% dashboard adoption increase</li>
+                                </ul>
+                            </div>
+                        </div>
+                        
+                        <div style="background: #eff6ff; padding: 1rem; border-radius: 0.5rem; margin-top: 1rem;">
+                            <strong>🎯 Success Metrics (60 Days):</strong> Deliver Gold→Platinum improvement recommendations, achieve 95% query optimization target, present executive-ready insights, increase stakeholder dashboard usage by 30%
+                        </div>
+                    </div>
+
+                    <!-- DAYS 61-90: Leadership & Innovation -->
+                    <div style="margin-bottom: 2rem; background: white; padding: 1.5rem; border-radius: 0.75rem; border-left: 5px solid #8b5cf6;">
+                        <div style="display: flex; align-items: center; margin-bottom: 1rem;">
+                            <div style="background: #8b5cf6; color: white; padding: 0.5rem 1rem; border-radius: 1.5rem; font-weight: 600; margin-right: 1rem;">Days 61-90</div>
+                            <h3 style="color: #8b5cf6; margin: 0; font-size: 1.25rem;">🧠 Innovation & Strategic Leadership</h3>
+                        </div>
+                        
+                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; margin-top: 1rem;">
+                            <div>
+                                <h4 style="color: #1e293b; font-size: 1rem; margin-bottom: 0.75rem;">🤖 AI/ML Preparation</h4>
+                                <ul style="margin: 0; padding-left: 1rem; line-height: 1.6;">
+                                    <li><strong>BigQuery ML Implementation:</strong> Pilot machine learning models for Play Points personalization</li>
+                                    <li><strong>Vertex AI Integration:</strong> Design recommendation engine architecture</li>
+                                    <li><strong>Gemini Analytics:</strong> Leverage AI-powered data preparation and analysis</li>
+                                    <li><strong>Predictive Modeling:</strong> Build churn prediction models for loyalty members</li>
+                                    <li><strong>Real-time Analytics:</strong> Design streaming data pipelines for instant insights</li>
+                                </ul>
+                            </div>
+                            <div>
+                                <h4 style="color: #1e293b; font-size: 1rem; margin-bottom: 0.75rem;">📈 Strategic Initiatives</h4>
+                                <ul style="margin: 0; padding-left: 1rem; line-height: 1.6;">
+                                    <li><strong>Q2 2025 Roadmap:</strong> Define analytics strategy for next quarter</li>
+                                    <li><strong>Cross-Functional Leadership:</strong> Lead data governance initiative</li>
+                                    <li><strong>Regulatory Compliance:</strong> Support Epic Games settlement and EU DMA requirements</li>
+                                    <li><strong>Team Expansion Planning:</strong> Identify hiring needs for growing analytics team</li>
+                                    <li><strong>Knowledge Transfer:</strong> Create documentation and training materials</li>
+                                </ul>
+                            </div>
+                        </div>
+                        
+                        <div style="background: #f3e8ff; padding: 1rem; border-radius: 0.5rem; margin-top: 1rem;">
+                            <strong>🎯 Success Metrics (90 Days):</strong> Launch ML pilot project, present Q2 strategic plan, establish data governance framework, mentor junior analysts, demonstrate $2M+ annual impact potential
+                        </div>
+                    </div>
+
+                    <!-- Key Success Factors -->
+                    <div style="background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%); color: white; padding: 1.5rem; border-radius: 0.75rem;">
+                        <h4 style="color: white; margin-bottom: 1rem; font-size: 1.1rem;">🏆 Key Success Factors for Maximum Impact</h4>
+                        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 1rem;">
+                            <div>
+                                <strong>• Scale Experience Leverage:</strong> Apply your 500M+ record processing expertise to Google's billion-row datasets
+                            </div>
+                            <div>
+                                <strong>• Stakeholder Mastery:</strong> Use your C-level presentation skills for cross-functional leadership
+                            </div>
+                            <div>
+                                <strong>• Process Excellence:</strong> Apply Lean Six Sigma methodologies to Google's "Year of Efficiency"
+                            </div>
+                            <div>
+                                <strong>• Technical Innovation:</strong> Bridge Snowflake/BigQuery expertise with emerging AI/ML capabilities
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `;
+            showToast('Comprehensive 30-60-90 day plan generated!', 'success');
+        }
+
+        async function generateThankYou() {
+            const interviewer = document.getElementById('interviewerSelect').value;
+            const notes = document.getElementById('interviewNotes').value;
+            const noteDiv = document.getElementById('thankYouNote');
+
+            if (!interviewer) {
+                showToast('Please select an interviewer', 'warning');
+                return;
+            }
+
+            // Find panelist details for personalization
+            const panelist = appState.extractedData.panelists.find(p => p.name === interviewer);
+            
+            // Generate personalized content based on panelist
+            let personalizedContent = '';
+            let specificMentions = '';
+            let roleRelevance = '';
+            
+            if (panelist) {
+                switch (panelist.name) {
+                    case 'Nikki Diman':
+                        personalizedContent = 'Our discussion about cross-functional stakeholder management and creative problem-solving with minimal data particularly resonated with me.';
+                        specificMentions = 'Your insights about the Gold-to-Platinum progression challenge within the 220M+ Play Points program highlighted the scale and complexity of analytics work at Google.';
+                        roleRelevance = 'My experience processing 500M+ SKU records at Home Depot and improving retention by 12% at Trulieve directly aligns with the scalable data solutions needed for Play Points optimization.';
+                        break;
+                    case 'Brian Mauch':
+                        personalizedContent = 'I appreciated your technical validation questions and focus on how contractors can drive strategic initiatives rather than just maintenance work.';
+                        specificMentions = 'Your perspective on balancing technical debt with rapid feature development in the Play Store ecosystem was especially insightful.';
+                        roleRelevance = 'My BigQuery experience with billion-row optimizations and 95% query performance improvements demonstrate the technical rigor needed for Google Play\'s infrastructure.';
+                        break;
+                    case 'Jolly Jayaprakash':
+                        personalizedContent = 'Thank you for your enthusiastic discussion about the role and the potential pathways for contractor-to-FTE conversion.';
+                        specificMentions = 'Your insights about what makes successful contractors stand out and the typical timeline for FTE transitions were very valuable.';
+                        roleRelevance = 'My immediate availability and proven track record of delivering results in contractor roles positions me well for both immediate impact and long-term success.';
+                        break;
+                    default:
+                        personalizedContent = 'Our discussion about the BI/Data Analyst role and Google Play\'s data-driven approach was truly engaging.';
+                        specificMentions = 'Your insights about the team dynamics and project scope helped me understand how I can contribute effectively.';
+                        roleRelevance = 'My experience with large-scale data analytics and stakeholder management aligns well with the role requirements.';
+                }
+            } else {
+                personalizedContent = 'Our discussion about the BI/Data Analyst role and Google Play\'s strategic initiatives was truly enlightening.';
+                specificMentions = 'Your insights about the team\'s approach to data analytics and the scale of Play Points operations were particularly valuable.';
+                roleRelevance = 'My experience with large-scale data processing and cross-functional collaboration positions me well for this role.';
+            }
+
+            // Include interview notes if provided
+            let notesSection = '';
+            if (notes.trim()) {
+                notesSection = `
+                    <p>I wanted to follow up on a few key points from our conversation:</p>
+                    <div style="background: #f8fafc; padding: 1rem; border-radius: 0.5rem; margin: 1rem 0; border-left: 3px solid #4f46e5;">
+                        ${notes.split('\n').map(note => note.trim() ? `<p style="margin: 0.5rem 0;">• ${note}</p>` : '').join('')}
+                    </div>
+                `;
+            }
+
+            noteDiv.innerHTML = `
+                <div style="padding: 1.5rem; background: linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%); border-radius: 0.75rem; border-left: 4px solid #0ea5e9;">
+                    <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 1.5rem;">
+                        <h3 style="color: #1e293b; margin: 0;">📧 Personalized Thank You Note</h3>
+                        ${aiBadge()}
+                    </div>
+                    
+                    <div style="background: white; padding: 1.5rem; border-radius: 0.5rem; line-height: 1.6; color: #374151;">
+                        <p><strong>Subject:</strong> Thank you - Google Play BI/Data Analyst Interview</p>
+                        <hr style="margin: 1rem 0; border: none; border-top: 1px solid #e5e7eb;">
+                        
+                        <p>Dear ${interviewer},</p>
+                        
+                        <p>${personalizedContent} ${specificMentions}</p>
+                        
+                        ${notesSection}
+                        
+                        <p>${roleRelevance}</p>
+                        
+                        <p>I'm genuinely excited about the opportunity to contribute to Google Play's continued growth and innovation. The scale of impact—supporting 220M+ Play Points members and $11.63B in quarterly revenue—combined with the upcoming AI/ML integration expansion, makes this role particularly compelling.</p>
+                        
+                        <p>Please let me know if you need any additional information from me. I look forward to the next steps in the process.</p>
+                        
+                        <p>Best regards,<br>
+                        <strong>Brandon Abbott</strong><br>
+                        <em>Data Analyst | SQL Expert | 8+ Years Experience</em></p>
+                        
+                        <div style="margin-top: 1.5rem; padding: 1rem; background: #f8fafc; border-radius: 0.5rem; border-left: 3px solid #22c55e;">
+                            <p style="margin: 0; font-size: 0.875rem; color: #64748b;"><strong>Quick Stats Reminder:</strong> 500M+ records processed | 12% retention improvement | $3.2M revenue impact | 95% query optimization | Available immediately</p>
+                        </div>
+                    </div>
+                </div>
+            `;
+            showToast('Personalized thank-you note generated!', 'success');
+        }
+
+        async function enhanceStory(index) {
+            const story = appState.extractedData.stories[index];
+            
+            // Enhance with realistic projections and transferable value rather than fictional accomplishments
+            const enhancements = {
+                'Customer Segmentation': {
+                    result: story.result + '\n\n🚀 <strong>Enhanced Strategic Value:</strong> This customer segmentation methodology demonstrates the analytical rigor needed for Google Play Points tier optimization. The approach of building personas from transaction data and measuring retention impact would directly translate to analyzing 220M+ Play Points member behavior patterns and identifying opportunities to improve Gold-to-Platinum progression rates.',
+                    additionalMetrics: '• Methodology: Proven scalable<br>• Application: Play Points ready<br>• Transferability: High'
+                },
+                'BigQuery Pipeline': {
+                    result: story.result + '\n\n🚀 <strong>Enhanced Strategic Value:</strong> This BigQuery architecture experience demonstrates readiness for Google Play\'s billion-row analytics challenges. The optimization techniques and automated pipeline approach would directly support the upcoming AI/ML integration expansion, particularly for real-time Play Points engagement analytics and personalized recommendation systems.',
+                    additionalMetrics: '• Scale Ready: Billion+ rows<br>• Architecture: Cloud-native<br>• AI/ML: Pipeline ready'
+                },
+                'Dashboard Adoption': {
+                    result: story.result + '\n\n🚀 <strong>Enhanced Strategic Value:</strong> This stakeholder enablement approach demonstrates the cross-functional collaboration skills essential for Google Play\'s matrixed environment. The training methodology and self-service analytics framework would directly support the diverse stakeholder ecosystem spanning Product, Marketing, Finance, and Engineering teams.',
+                    additionalMetrics: '• Stakeholder Model: Cross-functional<br>• Training: Scalable<br>• Adoption: Proven'
+                },
+                'Lean Six Sigma': {
+                    result: story.result + '\n\n🚀 <strong>Enhanced Strategic Value:</strong> This process optimization expertise aligns perfectly with Google\'s "Year of Efficiency" focus. The systematic approach to identifying and eliminating bottlenecks would be valuable for streamlining Play Points analytics workflows and supporting the team\'s rapid scaling needs as the loyalty program continues to grow.',
+                    additionalMetrics: '• Process Excellence: Six Sigma certified<br>• Efficiency Focus: Google-aligned<br>• Scaling: Systematic'
+                }
+            };
+            
+            // Find matching enhancement based on story title keywords
+            let enhancement = null;
+            for (const [key, value] of Object.entries(enhancements)) {
+                if (story.title.includes(key) || story.title.toLowerCase().includes(key.toLowerCase())) {
+                    enhancement = value;
+                    break;
+                }
+            }
+            
+            // Apply enhancement or provide generic improvement
+            if (enhancement) {
+                story.result = enhancement.result;
+                story.additionalMetrics = enhancement.additionalMetrics;
+            } else {
+                // Generic enhancement for other stories
+                story.result = story.result + '\n\n🚀 <strong>Enhanced Strategic Value:</strong> This achievement demonstrates the analytical problem-solving approach that would be valuable for Google Play\'s data challenges. The skills and methodology from this experience would transfer well to supporting Play Points analytics, stakeholder collaboration, and data-driven decision making in the Google ecosystem.';
+                story.additionalMetrics = '• Skills: Transferable<br>• Methodology: Scalable<br>• Readiness: High';
+            }
+            
+            showStoryDetail(index);
+            showToast('Story enhanced with strategic context!', 'success');
+        }
+
+        function showToast(message, type = 'info') {
+            const toast = document.getElementById('toast');
+            toast.textContent = message;
+            
+            const colors = {
+                success: '#22c55e',
+                error: '#ef4444',
+                warning: '#f59e0b',
+                info: '#3b82f6'
+            };
+            
+            toast.style.background = colors[type] || colors.info;
+            toast.classList.add('show');
+            
+            setTimeout(() => {
+                toast.classList.remove('show');
+            }, 3000);
+        }
+
+        // AI Assistant Functions
+        function setQuickQuestion(question) {
+            document.getElementById('assistantQuestion').value = question;
+        }
+
+        async function generateAssistantResponse() {
+            const question = document.getElementById('assistantQuestion').value.trim();
+            const responseDiv = document.getElementById('assistantResponse');
+            
+            if (!question) {
+                showToast('Please enter a question first', 'warning');
+                return;
+            }
+            
+            // Analyze question and provide tailored response based on prep materials and role
+            let response = '';
+            const questionLower = question.toLowerCase();
+            
+            // Background/Experience Questions
+            if (questionLower.includes('background') || questionLower.includes('emphasize') || questionLower.includes('highlight')) {
+                response = `
+                    <h4 style="color: #4f46e5; margin-bottom: 0.75rem;">🎯 Key Background Elements to Emphasize</h4>
+                    <div style="background: #f0fdf4; padding: 1rem; border-radius: 0.5rem; margin-bottom: 1rem;">
+                        <strong>1. Scale Expertise:</strong> Your experience with 500M+ SKU records at Home Depot and 100M+ daily transactions at Trulieve demonstrates you're already operating at Google-level data volumes.
+                    </div>
+                    <div style="background: #eff6ff; padding: 1rem; border-radius: 0.5rem; margin-bottom: 1rem;">
+                        <strong>2. Measurable Impact:</strong> The $3.2M revenue impact and 12% retention improvement show you deliver business results, not just technical solutions.
+                    </div>
+                    <div style="background: #fef3c7; padding: 1rem; border-radius: 0.5rem; margin-bottom: 1rem;">
+                        <strong>3. Stakeholder Leadership:</strong> Your C-level presentation experience and 30% dashboard adoption across 200+ users is rare for contractor candidates.
+                    </div>
+                    <div style="background: #f3e8ff; padding: 1rem; border-radius: 0.5rem;">
+                        <strong>4. Technical Transferability:</strong> Snowflake/BigQuery similarity and 95% query optimization show immediate contribution potential.
+                    </div>
+                `;
+            }
+            
+            // Role Connection Questions
+            else if (questionLower.includes('connect') || questionLower.includes('google play') || questionLower.includes('role') || questionLower.includes('specific')) {
+                response = `
+                    <h4 style="color: #22c55e; margin-bottom: 0.75rem;">🔗 Direct Role Connections</h4>
+                    <div style="background: #f8fafc; padding: 1rem; border-radius: 0.5rem; margin-bottom: 1rem; border-left: 3px solid #22c55e;">
+                        <strong>Play Points Tier Analysis:</strong> Your customer segmentation expertise directly applies to analyzing the Gold-to-Platinum progression challenge (600-2,999 to 3,000+ points gap) across 220M+ members.
+                    </div>
+                    <div style="background: #f8fafc; padding: 1rem; border-radius: 0.5rem; margin-bottom: 1rem; border-left: 3px solid #3b82f6;">
+                        <strong>BigQuery Scale:</strong> Your billion-row optimization experience positions you perfectly for Google's real-time analytics infrastructure supporting $11.63B quarterly revenue.
+                    </div>
+                    <div style="background: #f8fafc; padding: 1rem; border-radius: 0.5rem; margin-bottom: 1rem; border-left: 3px solid #8b5cf6;">
+                        <strong>AI/ML Readiness:</strong> Your Python pipeline experience and automated ETL work aligns with the upcoming 6-12 month AI integration expansion.
+                    </div>
+                    <div style="background: #f8fafc; padding: 1rem; border-radius: 0.5rem; border-left: 3px solid #f59e0b;">
+                        <strong>Process Excellence:</strong> Your Lean Six Sigma background directly supports Google's "Year of Efficiency" initiative.
+                    </div>
+                `;
+            }
+            
+            // Questions to Ask
+            else if (questionLower.includes('questions') || questionLower.includes('ask') || questionLower.includes('interviewer')) {
+                response = `
+                    <h4 style="color: #8b5cf6; margin-bottom: 0.75rem;">❓ Strategic Questions by Interviewer</h4>
+                    <div style="background: #e0f2fe; padding: 1rem; border-radius: 0.5rem; margin-bottom: 1rem;">
+                        <strong>For Nikki Diman (Service Delivery Manager):</strong>
+                        <ul style="margin: 0.5rem 0; padding-left: 1rem;">
+                            <li>How does your team balance standardized global metrics with local market insights for 220M+ Play Points members?</li>
+                            <li>What strategies work best when Product, Engineering, and Marketing have conflicting priorities?</li>
+                            <li>What specific AI initiatives are planned for Play Points personalization in the next 6-12 months?</li>
+                        </ul>
+                    </div>
+                    <div style="background: #f3e8ff; padding: 1rem; border-radius: 0.5rem; margin-bottom: 1rem;">
+                        <strong>For Brian Mauch (Technical Validation):</strong>
+                        <ul style="margin: 0.5rem 0; padding-left: 1rem;">
+                            <li>How does the team approach balancing technical debt with rapid feature development?</li>
+                            <li>What role do contractors typically play in driving strategic initiatives versus maintenance?</li>
+                            <li>What are the biggest technical challenges in processing data for 220M+ Play Points members?</li>
+                        </ul>
+                    </div>
+                    <div style="background: #f0fdf4; padding: 1rem; border-radius: 0.5rem;">
+                        <strong>For Jolly Jayaprakash (Recruiter):</strong>
+                        <ul style="margin: 0.5rem 0; padding-left: 1rem;">
+                            <li>What typically drives contractor-to-FTE conversion decisions in data roles?</li>
+                            <li>With your 10 years supporting Google, what makes successful contractors stand out?</li>
+                            <li>What's the typical timeline for FTE transitions in the analytics team?</li>
+                        </ul>
+                    </div>
+                `;
+            }
+            
+            // Contractor Concerns
+            else if (questionLower.includes('contractor') || questionLower.includes('full-time') || questionLower.includes('fte') || questionLower.includes('concerns')) {
+                response = `
+                    <h4 style="color: #f59e0b; margin-bottom: 0.75rem;">🤝 Addressing Contractor Concerns</h4>
+                    <div style="background: #f0fdf4; padding: 1rem; border-radius: 0.5rem; margin-bottom: 1rem; border-left: 4px solid #22c55e;">
+                        <strong>Reframe as Strategic Choice:</strong> "I chose the contractor path for this role because it offered immediate availability and the chance to prove my value quickly. I'm genuinely interested in potential FTE conversion - Google Play's scale represents exactly the kind of long-term challenge I want to build my career around."
+                    </div>
+                    <div style="background: #eff6ff; padding: 1rem; border-radius: 0.5rem; margin-bottom: 1rem; border-left: 4px solid #3b82f6;">
+                        <strong>Demonstrate Commitment:</strong> "My track record shows I deliver the same quality and dedication regardless of employment status. At Trulieve, I generated $3.2M impact as a contractor, and at Home Depot, I drove 30% dashboard adoption across 200+ stakeholders."
+                    </div>
+                    <div style="background: #fef3c7; padding: 1rem; border-radius: 0.5rem; border-left: 4px solid #f59e0b;">
+                        <strong>Show Long-term Interest:</strong> "The upcoming AI/ML integration expansion and the opportunity to optimize analytics for 220M+ Play Points members is exactly why I'm interested in potential FTE conversion opportunities."
+                    </div>
+                `;
+            }
+            
+            // Technical/BigQuery Questions
+            else if (questionLower.includes('bigquery') || questionLower.includes('technical') || questionLower.includes('sql') || questionLower.includes('snowflake')) {
+                response = `
+                    <h4 style="color: #0ea5e9; margin-bottom: 0.75rem;">⚙️ Technical Expertise Positioning</h4>
+                    <div style="background: #f0f9ff; padding: 1rem; border-radius: 0.5rem; margin-bottom: 1rem;">
+                        <strong>Snowflake → BigQuery Bridge:</strong> "Both are cloud-native, SQL-based platforms optimized for large-scale analytics. I've worked with similar concepts: columnar storage, partitioning, clustering, and cost optimization. My 95% query performance improvements demonstrate the optimization mindset critical for Google's scale."
+                    </div>
+                    <div style="background: #f0fdf4; padding: 1rem; border-radius: 0.5rem; margin-bottom: 1rem;">
+                        <strong>Scale Readiness:</strong> "I've already processed 500M+ records monthly at Home Depot and 100M+ daily transactions at Trulieve. This billion-row experience means I understand the architectural considerations needed for Google Play's data volumes."
+                    </div>
+                    <div style="background: #fef3c7; padding: 1rem; border-radius: 0.5rem;">
+                        <strong>Learning Approach:</strong> "While I'd need to learn Google-specific syntax and PLX dashboards, my analytical problem-solving approach and experience with similar platforms means minimal ramp-up time. I've successfully transitioned between Snowflake, BigQuery, and other cloud platforms in previous roles."
+                    </div>
+                `;
+            }
+            
+            // Generic question
+            else {
+                response = `
+                    <h4 style="color: #4f46e5; margin-bottom: 0.75rem;">💡 General Interview Strategy</h4>
+                    <div style="background: #f8fafc; padding: 1rem; border-radius: 0.5rem; margin-bottom: 1rem; border-left: 4px solid #4f46e5;">
+                        <strong>Always Connect to Google Play:</strong> For any question, tie your answer back to the 220M+ Play Points members, $11.63B quarterly revenue, or specific challenges like Gold-to-Platinum progression.
+                    </div>
+                    <div style="background: #f8fafc; padding: 1rem; border-radius: 0.5rem; margin-bottom: 1rem; border-left: 4px solid #22c55e;">
+                        <strong>Use Specific Numbers:</strong> Mention your key metrics (500M+ records, $3.2M impact, 95% optimization, 12% retention improvement) to demonstrate proven results.
+                    </div>
+                    <div style="background: #f8fafc; padding: 1rem; border-radius: 0.5rem; margin-bottom: 1rem; border-left: 4px solid #f59e0b;">
+                        <strong>Show Strategic Thinking:</strong> Reference the upcoming AI/ML expansion, regulatory challenges (Epic Games settlement), and Google's "Year of Efficiency" to show you understand the bigger picture.
+                    </div>
+                    <div style="background: #f8fafc; padding: 1rem; border-radius: 0.5rem; border-left: 4px solid #8b5cf6;">
+                        <strong>Ask Follow-up Questions:</strong> End your answers with questions that show deeper interest, like asking about the AI/ML timeline or specific Play Points optimization opportunities.
+                    </div>
+                `;
+            }
+            
+            responseDiv.innerHTML = `
+                <div style="padding: 1.5rem; background: linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%); border-radius: 0.75rem; border-left: 4px solid #0ea5e9;">
+                    <div style="display: flex; align-items: center; margin-bottom: 1rem;">
+                        <h3 style="color: #1e293b; margin: 0; margin-right: 0.5rem;">🤖 AI Assistant Response</h3>
+                        ${aiBadge()}
+                    </div>
+                    
+                    <div style="background: white; padding: 1rem; border-radius: 0.5rem; margin-bottom: 1rem;">
+                        <h4 style="color: #64748b; margin-bottom: 0.5rem;">Your Question:</h4>
+                        <p style="font-style: italic; color: #1e293b;">"${question}"</p>
+                    </div>
+                    
+                    <div style="background: white; padding: 1.5rem; border-radius: 0.5rem;">
+                        ${response}
+                    </div>
+                </div>
+            `;
+            
+            showToast('AI guidance generated!', 'success');
+        }
+
+        // Build detailed Company Intel from strategic CSVs. Gracefully falls back if fetch fails.
+        async function loadCompanyIntelFromCSVs() {
+            try {
+                const [metricsRes, keyRes] = await Promise.all([
+                    fetch('input_files/google_intelligence_metrics.csv'),
+                    fetch('input_files/google_interview_key_metrics.csv')
+                ]);
+
+                const [metricsCSV, keyCSV] = await Promise.all([
+                    metricsRes.ok ? metricsRes.text() : '',
+                    keyRes.ok ? keyRes.text() : ''
+                ]);
+
+                let metrics = [];
+                let key = [];
+                if (metricsCSV) {
+                    const parsed = Papa.parse(metricsCSV, { header: true, skipEmptyLines: true });
+                    metrics = parsed.data;
+                }
+                if (keyCSV) {
+                    const parsed = Papa.parse(keyCSV, { header: true, skipEmptyLines: true });
+                    key = parsed.data;
+                }
+
+                // Compose markdown sections
+                const highlights = [];
+                const pushHL = (label, value) => { if (value) highlights.push(`- ${label}: ${value}`); };
+
+                const get = (rows, startsWith) => rows.find(r => (r['Metric/Data Point'] || r['Category'] || '').startsWith(startsWith));
+                pushHL('Alphabet Q4 2024 Revenue', get(metrics, 'Alphabet Q4 2024 Revenue')?.Value);
+                pushHL('Google Services Q4 2024 Revenue', get(metrics, 'Google Services Q4 2024 Revenue')?.Value);
+                pushHL('Google Cloud Q4 2024 Revenue', get(metrics, 'Google Cloud Q4 2024 Revenue')?.Value);
+                pushHL('Google Play Points Members', get(key, 'Google Play Points Members')?.Value);
+                pushHL('Google Play Revenue Q4 2024', get(key, 'Google Play Revenue Q4 2024')?.Value);
+
+                const riskRow = get(metrics, 'Google Antitrust Fine Risk');
+
+                const md = `
+### Google Play — Strategic Briefing
+
+#### Key Financials
+${highlights.join('\n')}
+
+#### Product & Program Signals
+- AI‑driven recommendations and subscription expansion across Play
+- Loyalty scale: Play Points ${get(key, 'Google Play Points Members')?.Value || '200M+'}
+- Store size: ${get(metrics, 'Google Play Store Apps (2024)')?.Value || '3M+'} apps
+
+#### Risks & Regulatory
+- ${riskRow ? `Regulatory exposure: ${riskRow['Metric/Data Point']} — ${riskRow.Value} (${riskRow['Change/Growth']})` : 'Regulatory monitoring: EU DMA and app store policy actions'}
+- Ongoing Epic litigation and market conduct scrutiny
+
+#### Organization & Talent
+- Employees: ${get(metrics, 'Google Employee Count (End 2024)')?.Value || '180k+'}
+- Culture reviews: Glassdoor ${get(metrics, 'Glassdoor Google Rating')?.Value || '4.5/5'}; Comparably ${get(metrics, 'Comparably Google Employee Reviews Positive')?.Value || '85%'} positive
+
+#### Role Relevance (BI / Data Analyst)
+- High demand for SQL and experimentation; Cloud (BigQuery) emphasis
+- Executive‑ready storytelling and metric ownership are differentiators
+- Privacy & policy changes (DMA, Sandbox) require defensible methodology
+`;
+
+                return { markdown: md, source: 'Strategic Intelligence' };
+            } catch (e) {
+                // Fallback copy if CSVs are unavailable
+                return {
+                    source: 'Source Materials',
+                    markdown: `### Google Play — Strategic Briefing
+- Q4 2024 Play revenue grew and loyalty scale exceeded 200M members
+- Organization emphasizes AI‑powered products, experimentation, and rigor
+- Regulatory headwinds (EU DMA, litigation) require careful metric design`
+                };
+            }
+        }
+
+        // Build additional Company Intel from the two Strategic Intelligence files (.md/.docx)
+        async function loadCompanyIntelFromStrategicDocs() {
+            try {
+                const { text: combined } = await fetchTextForCandidates([
+                    'input_files/Strategic Intelligence Analysis - Google Play BI Role.md',
+                    'input_files/Strategic Intelligence Analysis - Google Play BI Role.docx',
+                    'input_files/Strategic Intelligence Analysis_ Google Play BI_Da.md',
+                    'input_files/Strategic Intelligence Analysis_ Google Play BI_Da.docx'
+                ]);
+                if (!combined) return '';
+
+                const lines = combined.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+
+                // Capture top facts, opportunities, and risks
+                const highlights = lines.filter(l => /^(\d+\.|[-•–])\s+/.test(l)).slice(0, 18)
+                                        .map(l => '- ' + l.replace(/^(\d+\.|[-•–])\s+/, ''));
+                const risks = lines.filter(l => /risk|dma|antitrust|regulat|privacy|compliance/i.test(l)).slice(0, 8)
+                                   .map(l => '- ' + l);
+                const opps = lines.filter(l => /opportunit|growth|expand|subscription|loyalty|points|monetiz/i.test(l)).slice(0, 8)
+                                   .map(l => '- ' + l);
+
+                let md = '';
+                if (highlights.length) md += '#### Strategic Highlights (Docs)\n' + highlights.join('\n') + '\n\n';
+                if (opps.length) md += '#### Opportunities (Docs)\n' + opps.join('\n') + '\n\n';
+                if (risks.length) md += '#### Risks (Docs)\n' + risks.join('\n') + '\n';
+                return md.trim();
+            } catch (e) { return ''; }
+        }
+
+        // Extract Strengths and Gaps from Strategic Intelligence + Synthesis files (.md/.docx/.pdf)
+        async function extractStrengthsAndGapsFromStrategicDocs() {
+            console.log('🔍 Extracting strengths from Resume and Strategic Synthesis PDF...');
+            try {
+                let allStrengths = [];
+                let allGaps = [];
+                
+                // Extract strengths from Strategic Synthesis PDF
+                try {
+                    console.log('📄 Processing Strategic Synthesis PDF...');
+                    const strategicRes = await fetch('input_files/Google - Strategic Synthesis + STAR + Experience Mapping.pdf');
+                    if (strategicRes.ok && window.pdfjsLib) {
+                        const arrayBuffer = await strategicRes.arrayBuffer();
+                        const pdf = await pdfjsLib.getDocument({data: arrayBuffer}).promise;
+                        let pdfText = '';
+                        for (let i = 1; i <= pdf.numPages; i++) {
+                            const page = await pdf.getPage(i);
+                            const textContent = await page.getTextContent();
+                            const pageText = textContent.items.map(item => item.str).join(' ');
+                            pdfText += pageText + '\n';
+                        }
+                        
+                        const strategicStrengths = extractStrengthsFromStrategicText(pdfText);
+                        allStrengths.push(...strategicStrengths);
+                        console.log(`✅ Extracted ${strategicStrengths.length} strengths from Strategic Synthesis PDF`);
+                    }
+                } catch (e) {
+                    console.log('⚠️ Could not process Strategic Synthesis PDF:', e);
+                }
+                
+                // Extract strengths from Resume PDF
+                try {
+                    console.log('📄 Processing Resume PDF...');
+                    const resumeRes = await fetch('input_files/Brandon Abbott Resume - Google Data Analyst.pdf');
+                    if (resumeRes.ok && window.pdfjsLib) {
+                        const arrayBuffer = await resumeRes.arrayBuffer();
+                        const pdf = await pdfjsLib.getDocument({data: arrayBuffer}).promise;
+                        let pdfText = '';
+                        for (let i = 1; i <= pdf.numPages; i++) {
+                            const page = await pdf.getPage(i);
+                            const textContent = await page.getTextContent();
+                            const pageText = textContent.items.map(item => item.str).join(' ');
+                            pdfText += pageText + '\n';
+                        }
+                        
+                        const resumeStrengths = extractStrengthsFromResumeText(pdfText);
+                        allStrengths.push(...resumeStrengths);
+                        console.log(`✅ Extracted ${resumeStrengths.length} strengths from Resume PDF`);
+                    }
+                } catch (e) {
+                    console.log('⚠️ Could not process Resume PDF:', e);
+                }
+                
+                // Remove duplicates and limit
+                const uniqueStrengths = Array.from(new Set(allStrengths)).slice(0, 12);
+                console.log(`✅ Total unique strengths extracted: ${uniqueStrengths.length}`);
+                
+                return { strengths: uniqueStrengths, gaps: allGaps };
+                
+            } catch (e) {
+                console.error('❌ Error extracting strengths:', e);
+                return { strengths: [], gaps: [] };
+            }
+        }
+
+        function extractStrengthsFromStrategicText(text) {
+            const strengths = [];
+            const lines = text.split(/\r?\n/).map(l => l.trim());
+            
+            console.log('🔍 Parsing strategic text for strength indicators...');
+            
+            // Look for explicit strength sections
+            for (let i = 0; i < lines.length; i++) {
+                const line = lines[i];
+                
+                // Find strength headers
+                if (line.match(/strengths?|advantages?|core competenc|key skills|expertise/i)) {
+                    // Collect bullet points after strength headers
+                    for (let k = i + 1; k < lines.length && k < i + 15; k++) {
+                        const nextLine = lines[k];
+                        if (/^(?:[-•–*]|\d+\.)\s+/.test(nextLine)) {
+                            const strength = nextLine.replace(/^(?:[-•–*]|\d+\.)\s+/, '').trim();
+                            if (strength.length > 15 && strength.length < 200) {
+                                strengths.push(strength);
+                            }
+                        } else if (!nextLine || nextLine.match(/^(gaps?|weakness|areas for|challenges?)/i)) {
+                            break;
+                        }
+                    }
+                }
+            }
+            
+            return strengths;
+        }
+
+        function extractStrengthsFromResumeText(text) {
+            const strengths = [];
+            const lines = text.split(/\r?\n/).map(l => l.trim());
+            
+            console.log('🔍 Parsing resume text for quantified achievements...');
+            
+            for (const line of lines) {
+                // Look for quantified achievements and results
+                if (line.match(/\d+%.*(?:improv|increas|reduc|optim|saved|generated|delivered)|(?:improv|increas|reduc|optim|saved|generated|delivered).*\d+%/i)) {
+                    if (line.length > 25 && line.length < 150) {
+                        strengths.push(line);
+                    }
+                }
+                
+                // Look for large scale metrics
+                if (line.match(/\d+(?:M|million|B|billion).*(?:records?|transactions?|users?|members?)|(?:records?|transactions?|users?|members?).*\d+(?:M|million|B|billion)/i)) {
+                    if (line.length > 20 && line.length < 130) {
+                        strengths.push(line);
+                    }
+                }
+                
+                // Look for time/efficiency improvements
+                if (line.match(/(?:reduced?|saved?).*\d+.*(?:hours?|minutes?|days?)|(?:\d+.*(?:hours?|minutes?|days?)).*(?:reduced?|saved?)/i)) {
+                    if (line.length > 20 && line.length < 120) {
+                        strengths.push(line);
+                    }
+                }
+                
+                // Look for technical expertise with years
+                if (line.match(/(?:sql|bigquery|python|tableau|analytics).*\d+.*years?|\d+.*years?.*(?:sql|bigquery|python|tableau|analytics)/i)) {
+                    if (line.length > 15 && line.length < 100) {
+                        strengths.push(line);
+                    }
+                }
+                
+                // Look for leadership and scale achievements
+                if (line.match(/(?:led|managed|trained|delivered).*\d+.*(?:team|users?|stakeholders?|projects?)|(?:\d+.*(?:team|users?|stakeholders?|projects?)).*(?:led|managed|trained|delivered)/i)) {
+                    if (line.length > 20 && line.length < 120) {
+                        strengths.push(line);
+                    }
+                }
+            }
+            
+            return strengths;
+        }
+
+        // Resume-driven strengths extraction (no panelists)
+        async function extractStrengthsFromResume() {
+            const strengths = [];
+            if (!window.pdfjsLib) return strengths;
+            try {
+                const p = 'input_files/Brandon Abbott Resume - Google Data Analyst.pdf';
+                const doc = await pdfjsLib.getDocument(p).promise;
+                let text = '';
+                for (let i = 1; i <= doc.numPages; i++) {
+                    const page = await doc.getPage(i);
+                    const content = await page.getTextContent();
+                    text += '\n' + content.items.map(it => it.str).join(' ');
+                }
+                const lines = text.split(/\r?\n/).map(s => s.trim());
+                const addIf = (rx, label) => { if (rx.test(text)) strengths.push(label); };
+                // Heuristics for core strengths
+                addIf(/\bSQL\b/i, 'Advanced SQL for analytics and optimization');
+                addIf(/BigQuery|Snowflake/i, 'Cloud DW experience (BigQuery/Snowflake)');
+                addIf(/ETL|ELT|pipeline/i, 'ETL/ELT pipeline design and ops');
+                addIf(/A\/B|experiment|hypothes/i, 'Experimentation and causal analysis');
+                addIf(/dashboard|Looker|Tableau|Data Studio|looker/i, 'Executive dashboards and self-service analytics');
+                addIf(/stakeholder|partner|cross[-\s]?functional/i, 'Cross-functional stakeholder management');
+                addIf(/python|pandas|notebook|jupyter/i, 'Python data tooling (pandas, notebooks)');
+                // Top bullets nearby "Skills" section
+                const skillsIdx = lines.findIndex(l => /skills/i.test(l));
+                if (skillsIdx !== -1) {
+                    for (let k = skillsIdx + 1; k < Math.min(lines.length, skillsIdx + 12); k++) {
+                        const ll = lines[k];
+                        if (/^(?:[-•–*]|\d+\.)\s+/.test(ll)) strengths.push(ll.replace(/^(?:[-•–*]|\d+\.)\s+/, ''));
+                        else if (/^[A-Z][A-Za-z\s]{3,}$/.test(ll)) break;
+                    }
+                }
+                return Array.from(new Set(strengths)).slice(0, 10);
+            } catch (e) {
+                return strengths;
+            }
+        }
+
+        // Build metric tiles for the Command Center grid from key-metrics CSV
+        async function loadMetricsForCommandCenter() {
+            try {
+                const res = await fetch('input_files/google_interview_key_metrics.csv');
+                if (!res.ok) return [];
+                const csv = await res.text();
+                const parsed = Papa.parse(csv, { header: true, skipEmptyLines: true }).data;
+
+                // Map first 6 meaningful rows to stat tiles
+                const tiles = parsed.slice(0, 6).map(row => ({
+                    value: row['Value'] || '',
+                    label: row['Category'] || '',
+                    context: row['Source'] || ''
+                })).filter(t => t.value && t.label);
+                return tiles;
+            } catch (e) {
+                return [];
+            }
+        }
+
+        // Infer company/role hints from available inputs without hard-coding content
+        async function inferCompanyAndRoleFromFiles(intel) {
+            let company = '';
+            let role = '';
+            try {
+                // Infer company from intel text if possible
+                const md = intel?.markdown || '';
+                if (/Google Play|Google\b/i.test(md)) company = 'Google';
+
+                // Infer role from presence of JD or strategy docs
+                // If a JD with role in filename is present, use that
+                const jdPaths = [
+                    'input_files/JD - Google - Data Analyst.pdf'
+                ];
+                for (const p of jdPaths) {
+                    try {
+                        const r = await fetch(p);
+                        if (r.ok) { role = 'Data Analyst'; break; }
+                    } catch (e) { /* ignore */ }
+                }
+
+                // If strategy docs reference BI role, fall back to BI/Data Analyst
+                if (!role) {
+                    try {
+                        const r = await fetch('input_files/Strategic Intelligence Analysis - Google Play BI Role.md');
+                        if (r.ok) role = 'BI/Data Analyst';
+                    } catch (e) { /* ignore */ }
+                }
+            } catch (e) { /* ignore */ }
+            return { company, role };
+        }
+
+        // Extract panelists from DOCX/PDF materials using simple heuristics
+        async function loadPanelistsFromDocuments() {
+            console.log('🔍 Loading panelists from job description and other files...');
+            let panelists = [];
+            let panelistQuestions = {};
+            
+            // First try to load from JD file
+            try {
+                const jdRes = await fetch('input_files/JD - Google - Data Analyst.md');
+                if (jdRes.ok) {
+                    const jdText = await jdRes.text();
+                    const jdPanelists = extractPanelistsFromJD(jdText);
+                    panelists.push(...jdPanelists);
+                    console.log(`✅ Extracted ${jdPanelists.length} panelists from JD file`);
+                }
+            } catch (e) {
+                console.log('⚠️ Could not load JD file:', e);
+            }
+            
+            // Also try to load enhanced panelist info from Q&A file
+            try {
+                const qaRes = await fetch('input_files/Google Q&A Bank.md');
+                if (qaRes.ok) {
+                    const qaText = await qaRes.text();
+                    const qaPanelists = extractPanelistsFromQAFile(qaText);
+                    
+                    // Merge with existing panelists
+                    qaPanelists.forEach(qaPanelist => {
+                        const existing = panelists.find(p => p.name === qaPanelist.name);
+                        if (existing) {
+                            Object.assign(existing, qaPanelist); // Merge additional details
+                        } else {
+                            panelists.push(qaPanelist);
+                        }
+                    });
+                    console.log(`✅ Enhanced panelist info from Q&A file`);
+                }
+            } catch (e) {
+                console.log('⚠️ Could not enhance from Q&A file:', e);
+            }
+            
+            // Fallback to other sources if needed
+            if (panelists.length === 0) {
+                console.log('🔍 Trying alternative panelist sources...');
+                const { text } = await fetchTextForCandidates([
+                    'input_files/Strategic Intelligence Analysis - Google Play BI Role.md',
+                    'input_files/Strategic Intelligence Analysis - Google Play BI Role.docx',
+                    'input_files/Strategic Intelligence Analysis Google Play BI.md',
+                    'input_files/Google - Interview Playbook.md',
+                    'input_files/Google - Interview Playbook.docx'
+                ]);
+                const fallbackData = parsePanelistsAndQuestionsFromText(text);
+                panelists = fallbackData.panelists || [];
+                panelistQuestions = fallbackData.panelistQuestions || {};
+            }
+            
+            return { panelists, panelistQuestions };
+        }
+
+        function extractPanelistsFromJD(content) {
+            console.log('📖 Parsing panelists from JD content...');
+            const panelists = [];
+            const lines = content.split(/\r?\n/);
+            
+            for (let i = 0; i < lines.length; i++) {
+                const line = lines[i].trim();
+                
+                // Look for interviewer patterns in JD
+                if (line.includes('Nikki Diman')) {
+                    const emailMatch = line.match(/<([^>]+)>/);
+                    panelists.push({
+                        name: 'Nikki Diman',
+                        role: 'Service Delivery Manager (Primary)',
+                        email: emailMatch ? emailMatch[1] : 'ndiman@xwf.google.com',
+                        company: 'Google via Scalence LLC',
+                        type: 'Primary Interviewer'
+                    });
+                    console.log('👤 Found Nikki Diman');
+                } else if (line.includes('Brian Mauch')) {
+                    const emailMatch = line.match(/<([^>]+)>/);
+                    panelists.push({
+                        name: 'Brian Mauch',
+                        role: 'Associate Director of Recruiting (Optional)',
+                        email: emailMatch ? emailMatch[1] : 'brian.mauch@scalence.com',
+                        company: 'Scalence LLC',
+                        type: 'Optional Interviewer'
+                    });
+                    console.log('👤 Found Brian Mauch');
+                } else if (line.includes('Jolly Jayaprakash')) {
+                    panelists.push({
+                        name: 'Jolly Jayaprakash',
+                        role: 'Recruiter',
+                        email: '',
+                        company: 'Scalence LLC',
+                        type: 'Recruiter'
+                    });
+                    console.log('👤 Found Jolly Jayaprakash');
+                }
+            }
+            
+            return panelists;
+        }
+
+        function extractPanelistsFromQAFile(content) {
+            console.log('📖 Extracting comprehensive panelist profiles from Q&A file...');
+            const panelists = [];
+            const lines = content.split(/\r?\n/);
+            
+            let currentPanelist = null;
+            let isInPanelistSection = false;
+            
+            for (let i = 0; i < lines.length; i++) {
+                const line = lines[i].trim();
+                
+                // Look for panelist sections like "### **NIKKI DIMAN - Service Delivery Manager**"
+                const panelistMatch = line.match(/### \*\*([A-Z\s]+) - (.+)\*\*/);
+                if (panelistMatch) {
+                    if (currentPanelist) {
+                        panelists.push(currentPanelist);
+                    }
+                    
+                    const rawName = panelistMatch[1].trim();
+                    const rawRole = panelistMatch[2].trim();
+                    
+                    // Normalize names to proper capitalization
+                    let name = rawName;
+                    let archetype = 'Champion';
+                    
+                    if (rawName.includes('NIKKI DIMAN')) {
+                        name = 'Nikki Diman';
+                        archetype = 'Gatekeeper';
+                    } else if (rawName.includes('BRIAN MAUCH')) {
+                        name = 'Brian Mauch'; 
+                        archetype = 'Technical Validator';
+                    } else if (rawName.includes('JOLLY JAYAPRAKASH')) {
+                        name = 'Jolly Jayaprakash';
+                        archetype = 'Process Champion';
+                    }
+                    
+                    currentPanelist = {
+                        name: name,
+                        role: rawRole,
+                        archetype: archetype,
+                        hotButtons: '',
+                        background: '',
+                        likelyQuestions: '',
+                        responseStyle: '',
+                        motivation: '',
+                        anxiety: '',
+                        interviewStyle: '',
+                        questions: []
+                    };
+                    
+                    // Set motivation and anxiety based on profiles
+                    if (name === 'Nikki Diman') {
+                        currentPanelist.motivation = 'Assessing cross-functional collaboration skills and creative problem-solving with minimal data';
+                        currentPanelist.anxiety = 'Generic answers without showing thought process or stakeholder awareness';
+                        currentPanelist.interviewStyle = 'Scenario-based problems with business context emphasis';
+                    } else if (name === 'Brian Mauch') {
+                        currentPanelist.motivation = 'Validating technical depth and scalability experience for Google-scale challenges';
+                        currentPanelist.anxiety = 'Lack of concrete technical experience or optimization strategies';
+                        currentPanelist.interviewStyle = 'Technical validation with architecture focus';
+                    } else if (name === 'Jolly Jayaprakash') {
+                        currentPanelist.motivation = 'Ensuring candidate availability and cultural fit for Google pace';
+                        currentPanelist.anxiety = 'Scheduling conflicts or lack of role enthusiasm';
+                        currentPanelist.interviewStyle = 'Logistics and availability focused';
+                    }
+                    
+                    isInPanelistSection = true;
+                    console.log(`👤 Found comprehensive profile for: ${currentPanelist.name} (${currentPanelist.archetype})`);
+                    continue;
+                }
+                
+                // Extract panelist details
+                if (isInPanelistSection && currentPanelist) {
+                    if (line.startsWith('**Hot Buttons:**')) {
+                        currentPanelist.hotButtons = line.replace(/^\*\*Hot Buttons:\*\*\s*/, '');
+                    } else if (line.startsWith('**Background:**')) {
+                        currentPanelist.background = line.replace(/^\*\*Background:\*\*\s*/, '');
+                    } else if (line.startsWith('**Likely Questions:**')) {
+                        currentPanelist.likelyQuestions = line.replace(/^\*\*Likely Questions:\*\*\s*/, '');
+                        // Convert to array for questions
+                        currentPanelist.questions = currentPanelist.likelyQuestions.split(',').map(q => q.trim()).filter(q => q);
+                    } else if (line.startsWith('**Response Style Needed:**')) {
+                        currentPanelist.responseStyle = line.replace(/^\*\*Response Style Needed:\*\*\s*/, '');
+                    } else if (line.startsWith('### ') || line.startsWith('## ')) {
+                        isInPanelistSection = false;
+                    }
+                }
+            }
+            
+            // Don't forget the last panelist
+            if (currentPanelist) {
+                panelists.push(currentPanelist);
+            }
+            
+            return panelists;
+        }
+
+        function parsePanelistsAndQuestionsFromText(text) {
+            if (!text) return { panelists: [], panelistQuestions: {} };
+            const rawLines = text.split(/\r?\n/).map(l => l.trim());
+
+            // Prefer Interviewer sections
+            let startIdx = rawLines.findIndex(l => /INTERVIEWER\s+DOSSIERS/i.test(l));
+            if (startIdx === -1) startIdx = rawLines.findIndex(l => /INTERVIEWER[-\s]+SPECIFIC\s+CALIBRATION/i.test(l));
+            if (startIdx === -1) startIdx = rawLines.findIndex(l => /^#+\s*INTERVIEWERS?/i.test(l));
+            let endIdx = -1;
+            if (startIdx !== -1) {
+                for (let i = startIdx + 1; i < rawLines.length; i++) {
+                    const L = rawLines[i];
+                    // Heuristic: next big uppercase header or tab name stops the section
+                    if (/^(PANEL STRATEGY|SQL PRACTICE|STAR STORIES|Q&A BANK|COMPANY INTEL|COMMAND CENTER|90-DAY PLAN|WAR ROOM|DEBRIEF)\b/i.test(L)) { endIdx = i; break; }
+                    if (/^[A-Z0-9][A-Z0-9\s:&/\-]{10,}$/.test(L)) { endIdx = i; break; }
+                }
+            }
+            const fixBrokenCaps = s => s.replace(/\b([A-Z])\s+([A-Z][A-Z]+)\b/g, '$1$2');
+            const lines = (startIdx !== -1 ? rawLines.slice(startIdx, endIdx > startIdx ? endIdx : startIdx + 250) : rawLines)
+                .map(s => fixBrokenCaps(s.trim())).filter(Boolean);
+
+            // Only roles used for panelists; exclude generic 'Analyst' to avoid false positives
+            const roleHint = /(Recruiter|Service\s*Delivery\s*Manager|Associate\s*Director|Director|Manager|Data\s*Scientist|Scientist|Engineer|Architect|Product\s*Manager|Program\s*Manager)/i;
+            const allowedRole = s => roleHint.test(s);
+            const namePatternStrict = /^([A-Z][a-zA-Z'.-]+(?:\s+[A-Z][a-zA-Z'.-]+){1,2})$/; // 2-3 tokens
+            const badNameTokens = /(Strategic|Industry|Average|Levels|Google|Resume|Analysis|Role|Document|JD|KPI|SQL|Data\s*Analyst)/i;
+            const isAllCapsName = n => /^[A-Z][A-Z'.-]+(?:\s+[A-Z][A-Z'.-]+){1,2}$/.test(n);
+            const toTitle = n => n.replace(/\s+/g,' ').toLowerCase().replace(/\b([a-z])/g, m => m.toUpperCase());
+            const cleanName = n => {
+                let name = n.trim().replace(/\s{2,}/g, ' ');
+                if (isAllCapsName(name)) name = toTitle(name);
+                return name;
+            };
+            const isLikelyPersonName = n => {
+                const t = cleanName(n);
+                return namePatternStrict.test(t) && !badNameTokens.test(t) && !/^Brandon(\s|$)/.test(t) && !/Abbott/i.test(t);
+            };
+            const results = [];
+            const questionsMap = {};
+            const push = (name, role) => {
+                if (!name || !role) return;
+                name = name.trim(); role = role.trim();
+                if (!allowedRole(role)) return;
+                if (!isLikelyPersonName(name)) return;
+                name = cleanName(name);
+                if (results.some(p => p.name.toLowerCase() === name.toLowerCase())) return;
+                const archetype = determineArchetypeFromRole(role);
+                results.push({ name, role, archetype });
+            };
+
+            // Pattern: "Name - Role" or "Name — Role" only
+            for (const line of lines) {
+                if (!/[–—-]/.test(line)) continue;
+                let m = line.match(/^([A-Z][A-Za-z'.-]+(?:\s+[A-Z][A-Za-z'.-]+){1,2}|[A-Z][A-Z'.-]+(?:\s+[A-Z][A-Z'.-]+){1,2})\s*[–—-]\s*([^\n]{3,160})$/);
+                if (m) { push(m[1], m[2]); continue; }
+            }
+
+            const panelists = results.slice(0, 6);
+
+            // Attempt to extract Motivation/Anxiety and Questions blocks near mentions
+            for (let i = 0; i < lines.length; i++) {
+                const line = lines[i];
+                for (const p of panelists) {
+                    if (line.toLowerCase().includes(p.name.toLowerCase())) {
+                        const windowLines = lines.slice(Math.max(0, i - 6), i + 12);
+                        const mot = windowLines.find(l => /^motivation\s*:/i.test(l));
+                        const anx = windowLines.find(l => /^anxiety\s*:/i.test(l));
+                        if (mot && !p.motivation) p.motivation = mot.replace(/^motivation\s*:\s*/i, '');
+                        if (anx && !p.anxiety) p.anxiety = anx.replace(/^anxiety\s*:\s*/i, '');
+
+                        // Questions: capture bullets after a header
+                        let qIdx = windowLines.findIndex(l => /questions?\s*(to ask|for|:)/i.test(l));
+                        if (qIdx !== -1) {
+                            const qs = [];
+                            for (let k = qIdx + 1; k < windowLines.length; k++) {
+                                const ll = windowLines[k];
+                                if (/^(?:[-•–*]|\d+\.)\s+/.test(ll)) qs.push(ll.replace(/^(?:[-•–*]|\d+\.)\s+/, ''));
+                                else if (/^\s*$/.test(ll) || /^(motivation|anxiety|talking points|profile|dossier)\s*:/i.test(ll)) break;
+                            }
+                            if (qs.length) questionsMap[p.name] = qs.slice(0, 6);
+                        }
+
+                        // Talking points
+                        let tIdx = windowLines.findIndex(l => /talking points\s*:|key messages\s*:/i.test(l));
+                        if (tIdx !== -1) {
+                            const tps = [];
+                            for (let k = tIdx + 1; k < windowLines.length; k++) {
+                                const ll = windowLines[k];
+                                if (/^(?:[-•–*]|\d+\.)\s+/.test(ll)) tps.push(ll.replace(/^(?:[-•–*]|\d+\.)\s+/, ''));
+                                else if (/^\s*$/.test(ll) || /^(motivation|anxiety|questions|profile|dossier)\s*:/i.test(ll)) break;
+                            }
+                            if (tps.length) p.talkingPoints = tps.slice(0, 5);
+                        }
+                    }
+                }
+            }
+
+            return { panelists, panelistQuestions: questionsMap };
+        }
+
+        function determineArchetypeFromRole(role) {
+            const r = role.toLowerCase();
+            if (/scientist|engineer|architect|analyst/.test(r)) return 'Technical Expert';
+            if (/recruiter|talent|hr/.test(r)) return 'Ally';
+            if (/director|head|lead|manager/.test(r)) return 'Champion';
+            if (/program|operations|coordinator|gate/.test(r)) return 'Gatekeeper';
+            return 'Ally';
+        }
+
+        // Load specific Google interview prep data
+        async function loadGoogleInterviewData() {
+            try {
+                // Enhanced Nikki Diman profile with specific intelligence from Strategic Analysis
+                const nikkiDiman = {
+                    name: 'Nikki Diman',
+                    role: 'Service Delivery Manager / Program Manager (Primary Interviewer)',
+                    archetype: 'Gatekeeper',
+                    company: 'Google via Scalence LLC',
+                    location: 'San Diego, California',
+                    linkedin: '500+ connections, active in talent acquisition space',
+                    experience: '19+ years in global recruiting, workforce management, and program implementation',
+                    previousRole: 'Director of Recruiting at Artech LLC (2015-2024), high-volume global recruiting',
+                    awards: 'Presidents Circle Winner (2018-2022) - top performance indicator',
+                    currentRole: 'Program Manager at Google through Scalence LLC (July 2024-Present)',
+                    expertise: 'Data analytics recruiting, RPO/BPO management, engineering talent acquisition',
+                    interviewStyle: 'Scenario-based questions, focuses on cross-functional collaboration and data-driven problem solving',
+                    managementStyle: 'Data-driven recruiting, global team leadership, relationship building',
+                    strengths: 'Quality and velocity of talent delivery, stakeholder management, process improvement',
+                    focusAreas: 'Cross-functional collaboration, performance management, global team coordination',
+                    hotButtons: 'Scenario-based problem solving, stakeholder relationship management, data-driven approaches',
+                    motivation: 'Assessing cross-functional collaboration skills and ability to work with diverse stakeholders',
+                    anxiety: 'Candidates not genuinely interested in the role, lacking availability, or giving generic answers without Google Play context',
+                    connectionPoints: [
+                        'Both have extensive experience with data/analytics teams',
+                        'Your media industry experience aligns with her background', 
+                        'Shared focus on stakeholder relationship management',
+                        'Your Lean Six Sigma background matches her process improvement experience'
+                    ],
+                    likelyQuestions: [
+                        'How does your team balance standardized global metrics with local market insights for 220M+ Play Points members?',
+                        'What strategies work best when Product, Engineering, and Marketing have conflicting priorities?',
+                        'What specific AI initiatives are planned for Play Points personalization in the next 6-12 months?'
+                    ]
+                };
+
+                // Brian Mauch (optional interviewer) - Enhanced profile from Strategic Intelligence
+                const brianMauch = {
+                    name: 'Brian Mauch',
+                    role: 'Associate Director of Recruiting (Optional/Secondary Interviewer)',
+                    archetype: 'Technical Expert',
+                    company: 'Scalence LLC',
+                    email: 'brian.mauch@scalence.com',
+                    confidence: 'MEDIUM - Limited information available',
+                    interviewPhase: 'Technical screening phase, secondary contact from job description',
+                    expertise: 'Technical recruiting, likely has technical background for screening',
+                    interviewStyle: 'Technical deep-dive questions, assessing hands-on SQL and analytical skills',
+                    motivation: 'Evaluating technical competency and ability to handle Google Play scale challenges',
+                    anxiety: 'Candidates who cannot demonstrate practical technical skills or explain complex concepts clearly',
+                    focusAreas: 'SQL optimization, data modeling, BigQuery performance, technical problem-solving',
+                    likelyQuestions: [
+                        'How does the team approach balancing technical debt with rapid feature development?',
+                        'What role do contractors typically play in driving strategic initiatives versus maintenance?',
+                        'What are the biggest technical challenges in processing data for 220M+ Play Points members?'
+                    ]
+                };
+
+                // Jolly Jayaprakash (recruiter) - Complete profile from 8/28 screening call transcript
+                const jollyJayaprakash = {
+                    name: 'Jolly Jayaprakash',
+                    role: 'Recruiter (Initial Screening - COMPLETED 8/28/25)',
+                    archetype: 'Ally',
+                    company: 'Scalence LLC (10+ years, dedicated Google/Apple recruiting)',
+                    location: 'Seattle, Washington',
+                    experience: '10+ years with current company, dedicated Google and Apple client support for past couple years',
+                    screeningDate: 'August 28, 2025 17:24:38 - 32 minute phone screening COMPLETED',
+                    personalityTraits: 'Friendly, conversational, process-focused, prefers call/text over email (inbox overwhelmed)',
+                    communicationStyle: 'Direct but warm, thorough in process explanation, transparent about constraints',
+                    processDetails: {
+                        rateNegotiated: '$55/hour W2 (stretched from $50 baseline, locked in system)',
+                        benefits: 'Subsidized health/dental/vision, 13 Google holidays paid, 5 days PTO',
+                        teamStructure: '2-3 other resources on same project, working with Google full-timers',
+                        startTarget: 'Mid-September 2025',
+                        interviewTurnaround: 'Less than 2 weeks'
+                    },
+                    interviewProcess: {
+                        round1: '30min scenario-based with Service Delivery Manager (Nikki Diman)',
+                        round2: '30min SQL coding interview (3 questions, expect to complete 2)',
+                        round3: '30min combination with hiring manager',
+                        scheduling: 'Monday/Tuesday 9am-2pm Pacific (12-5pm Eastern) preference'
+                    },
+                    roleInsights: [
+                        'Google Play BI/Data Science group - critical high visibility project',
+                        '100% SQL focused for first 6-12 months, team may expand to data science later',
+                        'Google BigQuery primary platform, PLX dashboards (internal, similar to Power BI/Tableau)',
+                        'Working with cross-functional teams, heavy stakeholder management',
+                        'Creative problem-solving with minimal data emphasized',
+                        'Contract only - no conversion to permanent, but no restrictions on applying to Google FTE roles'
+                    ],
+                    keyQuotes: [
+                        'They just want to know how creative you can be with cross-functional teams',
+                        'With these clients, its hard to really fetch data from all these stakeholders',
+                        'How creative you can be and come up with a solution with minimal data',
+                        'You are going to be working with huge amount of data sets',
+                        'These interviews are heavy - scenario based questions like investigating customer churn spikes'
+                    ],
+                    establishedRapport: [
+                        'Discussed your friend at Alphabet subsidiary (aerospace)',
+                        'Your tech recruiter friend at Datadog - understands process complexity',
+                        'Snowflake early adopter since 2018 - impressed',
+                        'SQL expertise 8+ years, Python 8.5/9 out of 10',
+                        'Southern background connection (she misses SoCal weather)'
+                    ],
+                    nextSteps: 'Send tailored resume, confirm rate, schedule first interview with Nikki Diman for Mon/Tues',
+                    likelyQuestions: [
+                        'Are you comfortable with the $55/hour rate and W2 setup?',
+                        'How do you handle working with difficult stakeholders across time zones?',
+                        'Walk me through investigating a customer churn spike scenario',
+                        'What advanced SQL techniques do you use most frequently?',
+                        'How do you approach creative problem-solving with limited data?'
+                    ]
+                };
+
+                // Load these into the app state
+                appState.extractedData.panelists = [nikkiDiman, brianMauch, jollyJayaprakash];
+
+                // Load specific anticipated questions with STAR mappings
+                const anticipatedQuestions = [
+                    {
+                        question: 'Tell me about a time you owned a KPI end-to-end and made it the cross-org source of truth.',
+                        category: 'Behavioral',
+                        difficulty: 'High',
+                        prepNotes: 'Tests: metrics ownership; SLOs; exec-ready storytelling',
+                        starLink: 'Daily KPI Email Automation',
+                        followUps: 'methodology changes and baseline resets; backfill & comms plan',
+                        confidence: 85
+                    },
+                    {
+                        question: 'Describe a stakeholder conflict you resolved between Product desire for richer data and Legal/Privacy constraints.',
+                        category: 'Behavioral',
+                        difficulty: 'High',
+                        prepNotes: 'Tests: conflict navigation; privacy/retention guardrails; approvals',
+                        starLink: 'Privacy-Safe Pipeline Rebuild',
+                        followUps: 'Privacy Sandbox limits; data minimization choices',
+                        confidence: 80
+                    },
+                    {
+                        question: 'Walk me through a high-stakes metric down incident before an exec readout—what did you do in the first hour?',
+                        category: 'Behavioral',
+                        difficulty: 'High',
+                        prepNotes: 'Tests: incident triage; structured thinking; comms under uncertainty',
+                        starLink: 'Release-Day Anomaly War-Room',
+                        followUps: 'methodology vs. behavior drop; RCA & prevention checklist',
+                        confidence: 90
+                    },
+                    {
+                        question: 'SQL: Compute 7-day retention and ARPPU by acquisition cohort from events (installs, sessions, purchases). Optimize for BigQuery.',
+                        category: 'Technical',
+                        difficulty: 'High',
+                        prepNotes: 'Tests: cohorting; window functions; joins; partition/cluster strategy',
+                        starLink: 'Retention & Monetization Cohorts',
+                        followUps: 'late events; timezone; bytes-scanned limits',
+                        confidence: 95
+                    },
+                    {
+                        question: 'Data model: Design the marts for Google Play Points analytics (earn, burn, tiers, quests, perks).',
+                        category: 'Technical',
+                        difficulty: 'High',
+                        prepNotes: 'Tests: fact/dim design; SCD; event taxonomy; attribution',
+                        starLink: 'Loyalty Mart Re-Design',
+                        followUps: 'perk uptake/LTV; quests instrumentation & logging',
+                        confidence: 85
+                    },
+                    {
+                        question: 'What if you have to investigate a sudden significant spike in customer churn - what data points would you be looking into?',
+                        category: 'Behavioral',
+                        difficulty: 'High',
+                        prepNotes: 'Tests: scenario-based thinking, cross-functional stakeholder management, creative problem-solving with minimal data (from Jolly transcript)',
+                        starLink: 'Customer Retention Analysis - $3.2M Recovery',
+                        followUps: 'customer tenure, customer lifetime value, segmentation approach, root cause methodology',
+                        confidence: 95,
+                        source: 'Jolly screening call - direct example question',
+                        interviewRound: 'Round 1 - Scenario-based with Nikki Diman'
+                    }
+                ];
+
+                appState.extractedData.questions = anticipatedQuestions;
+
+                // Load detailed STAR stories from Interview Playbook
+                const detailedStories = [
+                    {
+                        title: 'Customer Segmentation Driving $3.2M Revenue Impact',
+                        situation: 'At Trulieve, we were hemorrhaging customers—18% quarterly churn threatening $5M in annual revenue while targeting aggressive 15% growth. As Senior Data Analyst, I inherited a fragmented customer base across 100+ dispensaries with no unified understanding of customer segments. Marketing was spraying generic campaigns while inventory sat idle in wrong locations.',
+                        task: 'I was tasked with leveraging our 100M+ transaction records to create actionable customer and store personas that would drive both retention and acquisition strategies.',
+                        action: 'I architected a comprehensive segmentation solution: Built Python pipelines processing 100M+ daily records using K-Means and Hierarchical Clustering. Created 8 distinct customer personas based on purchase frequency, basket size, and product preferences. Developed store-level heat maps showing persona concentration by location. Designed Power BI dashboards with drill-down capabilities for marketing and operations teams. Implemented automated alerts when customer behavior indicated churn risk.',
+                        result: 'Achieved 12% improvement in customer acquisition and retention within 90 days, translating to $3.2M annual revenue increase. Inventory waste decreased by 20% through persona-based stocking. Marketing ROI improved 35% through targeted campaigns.',
+                        additionalMetrics: 'Process Excellence: Python ML pipelines | Impact Scale: 100M+ daily records | Business Value: $3.2M revenue increase, 20% waste reduction | Technical Skills: K-Means clustering, BigQuery optimization',
+                        googlePlayApplication: 'This directly parallels optimizing Play Points 220M members across 5 tiers. I would apply similar clustering techniques in BigQuery ML to identify why Gold members struggle reaching Platinum, creating targeted interventions to improve tier progression.',
+                        fromDocuments: true
+                    },
+                    {
+                        title: 'BigQuery Pipeline Automation at Scale',
+                        situation: 'Home Depot was drowning in 500 million SKU records monthly, with analysts spending 80% of their time on manual data processing instead of insights. As Data Analyst on the Supply Chain team, I discovered our 2,000+ stores suffered 25% mis-ship rates due to delayed inventory visibility. Teams manually consolidated data from 15 different systems.',
+                        task: 'Design and implement BigQuery-based ETL pipelines to automate SKU-level data processing while providing real-time inventory visibility through dashboards.',
+                        action: 'I architected a comprehensive BigQuery solution: Designed partitioned tables by date with clustering on SKU_ID and store_location. Built Python Cloud Functions for automated data ingestion from 15 source systems. Created incremental MERGE statements processing only changed records. Optimized queries using CTEs and materialized views, reducing runtime from 10 minutes to 30 seconds. Developed Tableau dashboards with BigQuery direct connection for real-time monitoring.',
+                        result: 'Reduced manual effort by 80%, saving 20+ hours weekly. Mis-ship rates dropped 25% within 60 days. Query performance improved 95%, enabling real-time decision-making. Annual savings exceeded $2M in labor costs alone.',
+                        additionalMetrics: 'Technical Excellence: 95% query performance improvement | Efficiency: 80% manual effort reduction | Business Impact: $2M annual savings | Scale: 500M monthly records',
+                        googlePlayApplication: 'This experience directly applies to building Play Points data marts. I would implement similar partitioning strategies for 220M member transactions, using clustering on member_id and tier_level for optimal query performance.',
+                        fromDocuments: true
+                    },
+                    {
+                        title: 'Cross-Functional Dashboard Adoption Success',
+                        situation: 'Home Depot invested $500K in Tableau but only 15% of executives actually used the dashboards, relying instead on Excel exports. Despite powerful analytics capabilities, senior leaders continued requesting manual reports. The disconnect between technical capabilities and business adoption threatened our entire BI strategy.',
+                        task: 'Drive adoption of self-service analytics among 200+ stakeholders ranging from C-suite to store managers.',
+                        action: 'I implemented a comprehensive adoption strategy: Conducted stakeholder interviews identifying three distinct user personas. Redesigned dashboards with role-based views (executive, operational, analytical). Created 15-minute video tutorials for each persona group. Developed quick-reference guides with business scenarios, not technical features. Ran 50+ hands-on training sessions focusing on business decisions, not tool features. Established office hours for ongoing support.',
+                        result: 'Achieved 30% adoption increase within 90 days. Manual report requests decreased 50%. Executives began referencing dashboard metrics in meetings. Time-to-insight improved from days to minutes.',
+                        additionalMetrics: 'Stakeholder Management: 200+ users across 3 personas | Adoption Success: 30% increase in 90 days | Efficiency: 50% reduction in manual requests | Leadership Impact: Executive dashboard usage',
+                        googlePlayApplication: 'With Play Points serving diverse stakeholders from Product to Marketing, I would apply this same persona-based approach to PLX dashboard design, ensuring each team sees metrics relevant to their decisions.',
+                        fromDocuments: true
+                    },
+                    {
+                        title: 'Lean Six Sigma Process Optimization',
+                        situation: '40% of projects delayed at Theatro Labs, threatening $3M in contracts due to SDLC inefficiencies.',
+                        task: 'Apply Lean Six Sigma to identify and eliminate process bottlenecks.',
+                        action: 'Mapped workflows, eliminated redundant handoffs, automated QA checks, and implemented continuous improvement cycles.',
+                        result: '30% improvement in delivery time, 15% profit increase, zero contract losses.',
+                        additionalMetrics: 'Process Excellence: Six Sigma certified | Efficiency Focus: Google-aligned | Scaling: Systematic approach to identifying and eliminating bottlenecks | Business Impact: $3M contracts saved',
+                        googlePlayApplication: 'This efficiency-first mindset aligns perfectly with Google Year of Efficiency focus and the need to streamline Play Points analytics workflows and support the teams rapid scaling needs as the loyalty program continues to grow.',
+                        fromDocuments: true
+                    }
+                ];
+
+                appState.extractedData.stories = detailedStories;
+
+                // Update all tabs
+                updatePanelStrategy();
+                updateQuestionsBank();
+                updateStoriesLibrary();
+                
+                showToast('Google interview data loaded successfully!', 'success');
+            } catch (error) {
+                console.error('Error loading Google interview data:', error);
+                showToast('Could not load interview data', 'error');
+            }
+        }
+
+        // Enhanced Q&A interactivity functions
+        function toggleQuestionDetail(index) {
+            const detailElement = document.getElementById(`question-detail-${index}`);
+            const chevronElement = document.getElementById(`chevron-${index}`);
+            
+            if (detailElement.style.display === 'none') {
+                detailElement.style.display = 'block';
+                chevronElement.style.transform = 'rotate(90deg)';
+                chevronElement.textContent = '▼';
+            } else {
+                detailElement.style.display = 'none';
+                chevronElement.style.transform = 'rotate(0deg)';
+                chevronElement.textContent = '▶';
+            }
+        }
+
+        function markPracticed(index) {
+            showToast('Question marked as practiced! 🎯', 'success');
+            // You could add logic here to track practiced questions
+        }
+
+        function addToReview(index) {
+            showToast('Added to review list! 📌', 'success');
+            // You could add logic here to maintain a review queue
+        }
+
+        // Interview Countdown Function
+        function initializeInterviewCountdown() {
+            // Interview date (ISO string for reliable parsing across browsers/timezones)
+            const interviewDate = new Date('2025-09-02T12:30:00-04:00');
+            
+            function updateCountdown() {
+                const now = new Date();
+                const timeDiff = interviewDate - now;
+                
+                if (timeDiff <= 0) {
+                    document.getElementById('countdownDisplay').textContent = 'Interview Time!';
+                    return;
+                }
+                
+                const days = Math.floor(timeDiff / (1000 * 60 * 60 * 24));
+                const hours = Math.floor((timeDiff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+                const minutes = Math.floor((timeDiff % (1000 * 60 * 60)) / (1000 * 60));
+                const seconds = Math.floor((timeDiff % (1000 * 60)) / 1000);
+                
+                let countdownText = '';
+                if (days > 0) {
+                    countdownText = `${days}d ${hours}h ${minutes}m`;
+                } else if (hours > 0) {
+                    countdownText = `${hours}h ${minutes}m ${seconds}s`;
+                } else {
+                    countdownText = `${minutes}m ${seconds}s`;
+                }
+                
+                document.getElementById('countdownDisplay').textContent = countdownText;
+            }
+            
+            // Update immediately and then every second
+            updateCountdown();
+            const countdownInterval = setInterval(() => {
+                // Stop updating if the countdown element is not visible or if interview has passed
+                const element = document.getElementById('countdownDisplay');
+                if (!element || interviewDate <= new Date()) {
+                    clearInterval(countdownInterval);
+                    return;
+                }
+                updateCountdown();
+            }, 1000);
+        }
+        
+        // Mobile Navigation Functions
+        function toggleMobileNav() {
+            const overlay = document.querySelector('.mobile-nav-overlay');
+            const menu = document.querySelector('.mobile-nav-menu');
+            
+            overlay.classList.add('show');
+            menu.classList.add('open');
+            document.body.style.overflow = 'hidden';
+        }
+        
+        function closeMobileNav() {
+            const overlay = document.querySelector('.mobile-nav-overlay');
+            const menu = document.querySelector('.mobile-nav-menu');
+            
+            overlay.classList.remove('show');
+            menu.classList.remove('open');
+            document.body.style.overflow = '';
+        }
+        
+        function switchTabMobile(tabName) {
+            // Switch to the tab
+            switchTab(tabName);
+            
+            // Update mobile nav active state
+            document.querySelectorAll('.mobile-nav-item').forEach(item => {
+                item.classList.remove('active');
+            });
+            document.querySelector(`[data-tab="${tabName}"]`).classList.add('active');
+            
+            // Close mobile nav
+            closeMobileNav();
+        }
+        
+        // Enhanced tab switching with mobile support
+        function switchTab(tabName) {
+            // Hide all tab content
+            document.querySelectorAll('.tab-content').forEach(tab => {
+                tab.classList.remove('active');
+            });
+            
+            // Remove active class from all tab buttons
+            document.querySelectorAll('.tab-btn').forEach(btn => {
+                btn.classList.remove('active');
+            });
+            
+            // Show selected tab content
+            const targetTab = document.getElementById(tabName);
+            if (targetTab) {
+                targetTab.classList.add('active');
+            }
+            
+            // Add active class to selected tab button
+            const targetBtn = document.querySelector(`[data-tab="${tabName}"]`);
+            if (targetBtn) {
+                targetBtn.classList.add('active');
+            }
+            
+            // Scroll to top on tab switch for better mobile UX
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+        }
+        
+        // Close mobile nav when clicking outside
+        document.addEventListener('click', function(event) {
+            const mobileNavToggle = document.querySelector('.mobile-nav-toggle');
+            const mobileNavMenu = document.querySelector('.mobile-nav-menu');
+            
+            if (!mobileNavToggle.contains(event.target) && !mobileNavMenu.contains(event.target)) {
+                closeMobileNav();
+            }
+        });
+        
+        // Handle escape key to close mobile nav
+        document.addEventListener('keydown', function(event) {
+            if (event.key === 'Escape') {
+                closeMobileNav();
+            }
+        });
+        
+        // Update mobile nav active state when regular tabs are clicked
+        document.addEventListener('DOMContentLoaded', function() {
+            // Override existing tab button clicks to update mobile nav
+            document.querySelectorAll('.tab-btn').forEach(btn => {
+                btn.addEventListener('click', function() {
+                    const tabName = this.getAttribute('data-tab');
+                    
+                    // Update mobile nav active state
+                    document.querySelectorAll('.mobile-nav-item').forEach(item => {
+                        item.classList.remove('active');
+                    });
+                    const mobileItem = document.querySelector(`.mobile-nav-item[data-tab="${tabName}"]`);
+                    if (mobileItem) {
+                        mobileItem.classList.add('active');
+                    }
+                });
+            });
+        });
