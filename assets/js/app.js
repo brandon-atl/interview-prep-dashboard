@@ -930,6 +930,87 @@ GROUP BY previous_tier, current_tier;`;
             updateQuestionList();
         }
 
+        function toHtml(text) {
+            if (!text) return '';
+            // If seems like HTML already, return as-is
+            if (/<\w+[^>]*>/.test(text)) return text;
+            return convertMarkdownToHtml(text);
+        }
+
+        function isGenericAnswer(ans) {
+            if (!ans) return true;
+            const s = ans.trim().toLowerCase();
+            return s.length < 20 ||
+                   s.includes('review prep notes') ||
+                   s === 'n/a' || s === 'tbd' || s === 'todo';
+        }
+
+        function pickStoryForCategory(category) {
+            const stories = appState?.extractedData?.stories || [];
+            if (stories.length === 0) return null;
+            const cat = (category || '').toLowerCase();
+            // Prefer story with metrics/result
+            let byMetric = stories.find(s => s.result && /\$|%|\d/.test(s.result));
+            if (cat.includes('tech')) {
+                return byMetric || stories[0];
+            }
+            if (cat.includes('behavior')) {
+                return stories[0];
+            }
+            return byMetric || stories[0];
+        }
+
+        function synthesizeAnswer(q) {
+            const cat = (q.category || 'general').toLowerCase();
+            const strengths = appState?.extractedData?.strengths || [];
+            const metrics = appState?.extractedData?.metrics || [];
+            const company = appState?.extractedData?.company || 'Google Play';
+            const story = pickStoryForCategory(cat);
+            const metricTile = (metrics[0] && metrics[0].value) ? `${metrics[0].value} ${metrics[0].label}` : '220M+ Play Points members';
+
+            if (cat.includes('tech')) {
+                return `
+                    <div>
+                        <strong>30s Summary:</strong> I will frame data sources, then implement a scalable BigQuery solution using CTEs and window functions, and validate cost/performance with partitioning and clustering.<br>
+                        <strong>Approach:</strong>
+                        <ol style="margin:0.5rem 0 0 1.25rem;">
+                            <li>Clarify schema and desired KPI(s) for ${company} (${metricTile}).</li>
+                            <li>Model with 1–2 CTEs for readability; apply window functions for cohorts/tiers.</li>
+                            <li>Use <code>PARTITION BY date</code> and <code>CLUSTER BY member_id, tier_level</code> to control cost/latency.</li>
+                            <li>Validate with sample queries and compare before/after timings; add comments and tests.</li>
+                        </ol>
+                        <strong>Proof:</strong> ${toHtml(strengths[0] || 'Reduced query time by 95% (10min→30s) and automated 80% of manual work on large datasets.')}<br>
+                        ${story ? `<strong>Example:</strong> ${toHtml(story.result || '')}` : ''}
+                    </div>`;
+            }
+            if (cat.includes('behavior')) {
+                return story ? `
+                    <div>
+                        <strong>S/T:</strong> ${toHtml(story.situation || '')} ${toHtml(story.task || '')}<br>
+                        <strong>A:</strong> ${toHtml(story.action || '')}<br>
+                        <strong>R:</strong> ${toHtml(story.result || '')}
+                    </div>` : `
+                    <div>
+                        <strong>Situation:</strong> Complex, ambiguous problem with scale considerations.<br>
+                        <strong>Task:</strong> Own analysis and drive a measurable outcome.<br>
+                        <strong>Action:</strong> Partner with stakeholders, prototype in BigQuery, validate findings, and iterate quickly.<br>
+                        <strong>Result:</strong> Quantified business impact; learning documented and shared.
+                    </div>`;
+            }
+            // Situational or general
+            return `
+                <div>
+                    <strong>Framework:</strong> Clarify goal, constraints, success metrics; evaluate levers; run a small experiment; scale with guardrails.<br>
+                    <strong>Plan:</strong>
+                    <ul style="margin:0.5rem 0 0 1.25rem;">
+                        <li>Define leading indicators and guardrails (cost, latency, churn).</li>
+                        <li>Segment users, prioritize high-lift cohorts (e.g., Gold→Platinum).</li>
+                        <li>Prototype analysis in BigQuery; instrument dashboards for monitoring.</li>
+                        <li>Roll out iteratively; measure impact and adjust.</li>
+                    </ul>
+                </div>`;
+        }
+
         function questionMeta(q) {
             const category = (q.category || 'general').toLowerCase();
             const isTech = category.includes('tech');
@@ -1019,14 +1100,17 @@ GROUP BY previous_tier, current_tier;`;
             
             container.innerHTML = filtered.map(q => {
                 // Format the answer for better readability
-                let formattedAnswer = q.answer;
-                if (q.answer) {
-                    // Split by common delimiters and format
-                    formattedAnswer = q.answer
+                // Build HTML answer: prefer extracted answer (converted to HTML), otherwise synthesize
+                let formattedAnswer = '';
+                if (q.answer && !isGenericAnswer(q.answer)) {
+                    const pre = q.answer
                         .replace(/Focus:/g, '<strong>Focus:</strong>')
                         .replace(/Use STAR:/g, '<br><strong>STAR Example:</strong>')
                         .replace(/Prepare for:/g, '<br><strong>Follow-ups:</strong>')
-                        .replace(/•/g, '<br>•');
+                        .replace(/\n\s*\n/g, '\n');
+                    formattedAnswer = toHtml(pre);
+                } else {
+                    formattedAnswer = synthesizeAnswer(q);
                 }
 
                 // Confidence level styling
@@ -1064,10 +1148,12 @@ GROUP BY previous_tier, current_tier;`;
                         </div>
                         
                         <div id="question-detail-${idx}" style="display: none; margin-top: 1rem; padding-top: 1rem; border-top: 1px solid #e5e7eb;">
-                            ${q.prepNotes ? `<div style="background: linear-gradient(135deg, #fef3c7, #fde68a); padding: 0.75rem; border-radius: 0.5rem; margin-bottom: 1rem; border-left: 4px solid #f59e0b;">
+                            <div style="background: linear-gradient(135deg, #fef3c7, #fde68a); padding: 0.75rem; border-radius: 0.5rem; margin-bottom: 1rem; border-left: 4px solid #f59e0b;">
                                 <strong style="color: #92400e;">💡 What This Tests:</strong>
-                                <div style="margin-top: 0.5rem; color: #78350f;">${q.prepNotes}</div>
-                            </div>` : ''}
+                                <div style="margin-top: 0.5rem; color: #78350f;">
+                                    ${q.prepNotes ? toHtml(q.prepNotes) : `<ul style='margin:0.5rem 0 0 1rem;'><li>${questionMeta(q).tests.join('</li><li>')}</li></ul>`}
+                                </div>
+                            </div>
                             
                             <div style="background: #f8fafc; padding: 0.75rem; border-radius: 0.5rem; margin-bottom: 1rem; border-left: 4px solid #22c55e;">
                                 <div style="display:flex;justify-content:space-between;align-items:center;">
