@@ -5,9 +5,9 @@
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>Master Interview Prep Dashboard</title>
         <script src="https://cdn.tailwindcss.com" defer></script>
-        <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/4.3.0/marked.min.js" defer></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/4.3.0/marked.min.js" defer integrity="sha384-QsSpx6a0USazT7nK7w8qXDgpSAPhFsb2XtpoLFQ5+X2yFN6hvCKnwEzN8M5FWaJb" crossorigin="anonymous"></script>
         <!-- Feature libs are lazy-loaded in app.js when needed: PapaParse, Mammoth, PDF.js -->
-        <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js" defer></script>
+        <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js" defer integrity="sha384-+VfUPEb0PdtChMwmBcBmykRMDd+v6D/oFmB3rZM/puCMDYcIvF968OimRh4KQY9a" crossorigin="anonymous"></script>
         <link rel="stylesheet" href="assets/css/styles.css">
 </head>
 <body>
@@ -117,7 +117,7 @@
             <div class="tab-content" id="command">
                 <h2 style="font-size: 1.5rem; font-weight: 600; margin-bottom: 1.5rem; text-align: center;">Strategic Imperative</h2>
                 
-                <div id="keyMetrics" class="grid grid-5" style="margin-bottom: 2rem;">
+                <div id="keyMetrics" class="grid key-metrics-grid" style="margin-bottom: 2rem;">
                     <!-- Metrics will be populated here -->
                 </div>
                 
@@ -169,7 +169,7 @@
                 <h2 style="font-size: 1.5rem; font-weight: 600; margin-bottom: 1.5rem; text-align: center;">Company Intelligence</h2>
                 
                 <!-- Key Company Metrics Tiles -->
-                <div id="companyMetrics" class="grid grid-4" style="margin-bottom: 2rem;">
+                <div id="companyMetrics" class="grid company-metrics-grid" style="margin-bottom: 2rem;">
                     <!-- Company metrics tiles will be populated here -->
                 </div>
                 
@@ -720,6 +720,6 @@ GROUP BY tier_level</code></pre>
     <!-- Toast Notification -->
     <div id="toast" class="toast"></div>
 
-    <script src="assets/js/app.js" defer></script>
+    <script type="module" src="assets/js/app.js"></script>
 </body>
 </html>

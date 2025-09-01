@@ -537,14 +537,34 @@ document.addEventListener('DOMContentLoaded', async function() {
             ];
         }
 
+        function normalizeTiles(list, targetCount, fallbackList = []) {
+            const src = Array.isArray(list) ? list.filter(Boolean) : [];
+            let out = src.slice(0, targetCount);
+            if (out.length < targetCount) {
+                const padFrom = (fallbackList.length ? fallbackList : getDefaultMetrics());
+                let i = 0;
+                while (out.length < targetCount) {
+                    out.push(padFrom[i % padFrom.length]);
+                    i++;
+                }
+            }
+            return out;
+        }
+
+        function getTargetTileCount() {
+            // Desktop target is 8 (2 rows x 4 columns)
+            // On smaller screens we still prepare 8; CSS handles wrap.
+            return 8;
+        }
+
         function updateCommandCenter() {
             const data = appState.extractedData;
             
             // Update metrics with proper formatting
             const metricsContainer = document.getElementById('keyMetrics');
             if (metricsContainer) {
-                // Always use default metrics for consistent display
-                const metricsToShow = getDefaultMetrics();
+                const sourceMetrics = (data.metrics && data.metrics.length ? data.metrics : getDefaultMetrics());
+                const metricsToShow = normalizeTiles(sourceMetrics, getTargetTileCount(), getDefaultMetrics());
                 
                 console.log('Updating metrics:', metricsToShow);
                 
@@ -585,7 +605,7 @@ document.addEventListener('DOMContentLoaded', async function() {
             // Update Company Metrics Tiles - Strategic Context (non-overlapping with Command Center)
             const metricsContainer = document.getElementById('companyMetrics');
             if (metricsContainer) {
-                const companyMetrics = [
+                const baseMetrics = [
                     { label: 'Market Dominance', value: '49%', growth: 'US Revenue', context: 'vs Apple Store' },
                     { label: 'Global Downloads', value: '100B+', growth: 'Annual', context: 'Play Store' },
                     { label: 'AI Investment', value: '$75B', growth: '2025 CapEx', context: 'Infrastructure' },
@@ -595,6 +615,7 @@ document.addEventListener('DOMContentLoaded', async function() {
                     { label: 'SQL Job Demand', value: '52.9%', growth: 'Of Postings', context: '2024 Market' },
                     { label: 'Data Growth', value: '23%', growth: 'Through 2032', context: 'Analytics Jobs' }
                 ];
+                const companyMetrics = normalizeTiles(baseMetrics, getTargetTileCount(), baseMetrics);
                 
                 const colors = ['#4f46e5', '#22c55e', '#f59e0b', '#8b5cf6', '#0ea5e9', '#ec4899', '#14b8a6', '#f97316'];
                 metricsContainer.innerHTML = companyMetrics.map((metric, index) => {
