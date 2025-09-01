@@ -222,6 +222,9 @@ document.addEventListener('DOMContentLoaded', async function() {
                     case 'story-enhance':
                         if (el.dataset.index) enhanceStory(el.dataset.index);
                         break;
+                    case 'copy-outline':
+                        if (el.dataset.index) { e.stopPropagation(); copyQuestionOutline(el.dataset.index); }
+                        break;
                     case 'sql-copy-example': {
                         const sc = el.dataset.scenario || 'example1';
                         if (sc === 'example1') {
@@ -927,6 +930,77 @@ GROUP BY previous_tier, current_tier;`;
             updateQuestionList();
         }
 
+        function questionMeta(q) {
+            const category = (q.category || 'general').toLowerCase();
+            const isTech = category.includes('tech');
+            const isBehavioral = category.includes('behavior');
+            const isSituational = category.includes('situat');
+            const outline = isTech
+                ? [
+                    'Problem: define dataset, volume, and business objective',
+                    'Approach: CTEs, window functions, partition/cluster strategy',
+                    'Optimization: cost/perf trade-offs and validation',
+                    'Impact: before/after metrics and stakeholder value'
+                  ]
+                : isBehavioral
+                ? [
+                    'Situation: brief context + constraint',
+                    'Task: clear objective and your role',
+                    'Action: 3–4 actions highlighting skills + collaboration',
+                    'Result: quantified impact + learning'
+                  ]
+                : [
+                    'Clarify assumptions and constraints',
+                    'Prioritize levers and define success metrics',
+                    'Stepwise plan with risks and mitigations',
+                    'Measurement/next steps'
+                  ];
+            const tests = isTech
+                ? ['SQL fluency (CTEs, windows)', 'BigQuery scale thinking', 'Optimization and cost-awareness']
+                : isBehavioral
+                ? ['Ownership and bias-for-action', 'Stakeholder management', 'Quantified outcomes']
+                : ['Product sense', 'Framing/communication', 'Data-driven decision making'];
+            const pitfalls = isTech
+                ? ['Vague schemas or ignoring partitioning', 'No validation/edge cases']
+                : isBehavioral
+                ? ['Story without numbers', 'Ambiguous role/ownership']
+                : ['Jumping to solution without clarifying goal', 'No trade-off discussion'];
+            const success = isTech
+                ? ['Correctness, performance, cost, and readability addressed']
+                : isBehavioral
+                ? ['Clear role, concrete actions, and measurable impact']
+                : ['Clear framework, metrics, and pragmatic plan'];
+            const metrics = [
+                'Scale (rows/users/transactions)',
+                'Performance (latency/cost)',
+                'Impact (revenue/retention/activation)'
+            ];
+            const time = q.interviewRound?.includes('phone') ? '60–90s' : (isTech ? '2–3 min walkthrough' : '60–120s');
+            return { outline, tests, pitfalls, success, metrics, time };
+        }
+
+        function copyQuestionOutline(index) {
+            try {
+                const el = document.getElementById(`qa-outline-${index}`);
+                if (!el) { showToast('Outline not found', 'error'); return; }
+                const text = el.innerText || el.textContent || '';
+                if (navigator.clipboard?.writeText) {
+                    navigator.clipboard.writeText(text).then(() => showToast('Outline copied!', 'success')).catch(() => showToast('Copied outline to clipboard', 'success'));
+                } else {
+                    const sel = window.getSelection();
+                    const range = document.createRange();
+                    range.selectNodeContents(el);
+                    sel.removeAllRanges();
+                    sel.addRange(range);
+                    document.execCommand('copy');
+                    sel.removeAllRanges();
+                    showToast('Outline copied!', 'success');
+                }
+            } catch (e) {
+                showToast('Could not copy outline', 'error');
+            }
+        }
+
         function updateQuestionList() {
             const container = document.getElementById('questionList');
             if (!container) return;
@@ -959,6 +1033,7 @@ GROUP BY previous_tier, current_tier;`;
                 const confidenceColor = q.confidence >= 90 ? '#22c55e' : q.confidence >= 80 ? '#f59e0b' : '#ef4444';
                 const confidenceText = q.confidence >= 90 ? 'HIGH' : q.confidence >= 80 ? 'MED' : 'LOW';
                 const idx = filtered.indexOf(q);
+                const meta = questionMeta(q);
                 
                 return `
                     <div class="question-item" style="background: white; border-radius: 0.75rem; padding: 1.25rem; margin-bottom: 1rem; box-shadow: 0 1px 3px rgba(0,0,0,0.1); border: 1px solid #e2e8f0; transition: all 0.3s ease; cursor: pointer;" 
@@ -972,6 +1047,7 @@ GROUP BY previous_tier, current_tier;`;
                                     </span>
                                     ${q.difficulty ? `<span style="display: inline-block; padding: 0.25rem 0.75rem; background: #8b5cf6; color: white; border-radius: 1rem; font-size: 0.75rem; font-weight: 600;">${q.difficulty}</span>` : ''}
                                     ${q.confidence ? `<span style="display: inline-block; padding: 0.25rem 0.75rem; background: ${confidenceColor}; color: white; border-radius: 1rem; font-size: 0.75rem; font-weight: 600;">${confidenceText} ${q.confidence}%</span>` : ''}
+                                    ${q.likelyAsker ? `<span style="display: inline-block; padding: 0.25rem 0.5rem; background: #0ea5e9; color: white; border-radius: 9999px; font-size: 0.7rem;">👤 ${q.likelyAsker}</span>` : ''}
                                     ${q.source ? `<span style="display: inline-block; padding: 0.125rem 0.5rem; background: #22c55e; color: white; border-radius: 9999px; font-size: 0.625rem;">FROM ${q.source.toUpperCase()}</span>` : ''}
                                     ${q.fromCSV ? '<span style="display: inline-block; padding: 0.125rem 0.5rem; background: #22c55e; color: white; border-radius: 9999px; font-size: 0.625rem;">Q&A BANK</span>' : ''}
                                     ${q.aiGenerated ? '<span class="ai-badge">AI</span>' : ''}
@@ -993,6 +1069,37 @@ GROUP BY previous_tier, current_tier;`;
                                 <div style="margin-top: 0.5rem; color: #78350f;">${q.prepNotes}</div>
                             </div>` : ''}
                             
+                            <div style="background: #f8fafc; padding: 0.75rem; border-radius: 0.5rem; margin-bottom: 1rem; border-left: 4px solid #22c55e;">
+                                <div style="display:flex;justify-content:space-between;align-items:center;">
+                                    <strong style="color:#14532d;">🧭 Suggested Answer Outline (${meta.time})</strong>
+                                    <button class="btn btn-sm" data-action="copy-outline" data-index="${idx}" style="background:#22c55e;color:white;padding:0.25rem 0.5rem;border:none;border-radius:0.375rem;">Copy</button>
+                                </div>
+                                <ul id="qa-outline-${idx}" style="margin:0.5rem 0 0 1rem; color:#14532d;">
+                                    ${meta.outline.map(i => `<li>${i}</li>`).join('')}
+                                </ul>
+                            </div>
+
+                            <div style="display:grid;grid-template-columns: repeat(auto-fit,minmax(220px,1fr));gap:0.75rem;">
+                                <div style="background:#ecfeff;padding:0.75rem;border-radius:0.5rem;border-left:4px solid #06b6d4;">
+                                    <strong style="color:#0e7490;">✅ Success Criteria</strong>
+                                    <ul style="margin:0.5rem 0 0 1rem;color:#0e7490;">
+                                        ${meta.success.map(s => `<li>${s}</li>`).join('')}
+                                    </ul>
+                                </div>
+                                <div style="background:#fff7ed;padding:0.75rem;border-radius:0.5rem;border-left:4px solid #fb923c;">
+                                    <strong style="color:#c2410c;">⚠️ Pitfalls</strong>
+                                    <ul style="margin:0.5rem 0 0 1rem;color:#c2410c;">
+                                        ${meta.pitfalls.map(p => `<li>${p}</li>`).join('')}
+                                    </ul>
+                                </div>
+                                <div style="background:#f0fdf4;padding:0.75rem;border-radius:0.5rem;border-left:4px solid #22c55e;">
+                                    <strong style="color:#166534;">📊 Metrics To Mention</strong>
+                                    <ul style="margin:0.5rem 0 0 1rem;color:#166534;">
+                                        ${meta.metrics.map(m => `<li>${m}</li>`).join('')}
+                                    </ul>
+                                </div>
+                            </div>
+
                             ${q.starLink ? `<div style="background: linear-gradient(135deg, #dbeafe, #bfdbfe); padding: 0.75rem; border-radius: 0.5rem; margin-bottom: 1rem; border-left: 4px solid #3b82f6;">
                                 <strong style="color: #1d4ed8;">⭐ Recommended STAR Story:</strong>
                                 <div style="margin-top: 0.5rem; color: #1e40af; font-weight: 500;">${q.starLink}</div>
