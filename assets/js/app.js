@@ -1084,21 +1084,7 @@ document.addEventListener('DOMContentLoaded', async function() {
             updateQuestionList();
         }
 
-        // Enhanced question display functions
-        function toggleQuestionDetail(questionId) {
-            const details = document.getElementById(`${questionId}-details`);
-            const toggle = document.getElementById(`${questionId}-toggle`);
-            
-            if (details && toggle) {
-                if (details.style.display === 'none') {
-                    details.style.display = 'block';
-                    toggle.textContent = '🔼 Hide Details';
-                } else {
-                    details.style.display = 'none';
-                    toggle.textContent = '📖 View Details';
-                }
-            }
-        }
+        // Enhanced question display functions (handler implemented later with index-based toggle)
 
         function getCategoryColor(category) {
             const colors = {
@@ -4188,6 +4174,7 @@ GROUP BY m.member_id, total_points, tier_min_points, tier_max_points, last_activ
         // Build detailed Company Intel from strategic CSVs. Gracefully falls back if fetch fails.
         async function loadCompanyIntelFromCSVs() {
             try {
+                await ensurePapaParse();
                 const [metricsRes, keyRes] = await Promise.all([
                     fetch('input_files/google_intelligence_metrics.csv'),
                     fetch('input_files/google_interview_key_metrics.csv')
@@ -4298,6 +4285,7 @@ ${highlights.join('\n')}
                 
                 // Extract strengths from Strategic Synthesis PDF
                 try {
+                    await ensurePdfJs();
                     console.log('📄 Processing Strategic Synthesis PDF...');
                     const strategicRes = await fetch('input_files/Google - Strategic Synthesis + STAR + Experience Mapping.pdf');
                     if (strategicRes.ok && window.pdfjsLib) {
@@ -4321,6 +4309,7 @@ ${highlights.join('\n')}
                 
                 // Extract strengths from Resume PDF
                 try {
+                    await ensurePdfJs();
                     console.log('📄 Processing Resume PDF...');
                     const resumeRes = await fetch('input_files/Brandon Abbott Resume - Google Data Analyst.pdf');
                     if (resumeRes.ok && window.pdfjsLib) {
@@ -4433,6 +4422,7 @@ ${highlights.join('\n')}
         // Resume-driven strengths extraction (no panelists)
         async function extractStrengthsFromResume() {
             const strengths = [];
+            await ensurePdfJs();
             if (!window.pdfjsLib) return strengths;
             try {
                 const p = 'input_files/Brandon Abbott Resume - Google Data Analyst.pdf';
@@ -4474,6 +4464,7 @@ ${highlights.join('\n')}
                 const res = await fetch('input_files/google_interview_key_metrics.csv');
                 if (!res.ok) return [];
                 const csv = await res.text();
+                await ensurePapaParse();
                 const parsed = Papa.parse(csv, { header: true, skipEmptyLines: true }).data;
 
                 // Map first 6 meaningful rows to stat tiles
