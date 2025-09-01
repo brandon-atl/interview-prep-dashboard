@@ -45,7 +45,7 @@
         }
 
         // Initialize
-        document.addEventListener('DOMContentLoaded', async function() {
+document.addEventListener('DOMContentLoaded', async function() {
             setupEventListeners();
             
             // Initialize metrics immediately
@@ -78,11 +78,7 @@
                 updateDataStatus('Dashboard ready. Click "Load From input_files" to load your materials.', 'info');
             }
             
-            if (window.pdfjsLib) {
-                try {
-                    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
-                } catch (e) { /* ignore */ }
-            }
+            // PDF.js worker is configured when the library is lazy-loaded
             // Removed duplicate auto-load of sample data to avoid double work
         });
 
@@ -136,6 +132,101 @@
             if (categorySelect) {
                 categorySelect.addEventListener('change', filterQuestions);
             }
+            // Global delegated click handlers
+            document.addEventListener('click', (e) => {
+                const el = e.target.closest('[data-action]');
+                if (!el) return;
+                const action = el.dataset.action;
+                switch (action) {
+                    case 'mobile-nav-open':
+                        toggleMobileNav();
+                        break;
+                    case 'mobile-nav-close':
+                        closeMobileNav();
+                        break;
+                    case 'mobile-nav-switch':
+                        if (el.dataset.tab) switchTabMobile(el.dataset.tab);
+                        break;
+                    case 'process-files':
+                        processFiles();
+                        break;
+                    case 'load-sample':
+                        loadSampleData();
+                        break;
+                    case 'gen-power-intro':
+                        generatePowerIntro();
+                        break;
+                    case 'gen-talking-points':
+                        generateTalkingPoints();
+                        break;
+                    case 'gen-gap-strategies':
+                        generateGapStrategies();
+                        break;
+                    case 'gen-cultural':
+                        generateCulturalAnalysis();
+                        break;
+                    case 'add-panelist':
+                        addPanelist();
+                        break;
+                    case 'gen-more-questions':
+                        generateMoreQuestions();
+                        break;
+                    case 'filter-questions':
+                        if (el.dataset.category) filterQuestions(el.dataset.category);
+                        break;
+                    case 'load-sql-scenario':
+                        if (el.dataset.scenario) loadScenario(el.dataset.scenario);
+                        break;
+                    case 'validate-sql':
+                        validateSQLSolution();
+                        break;
+                    case 'optimize-sql':
+                        optimizeSQL();
+                        break;
+                    case 'show-sql-examples':
+                        showExampleSolutions();
+                        break;
+                    case 'gen-rebuttal':
+                        generateRebuttal();
+                        break;
+                    case 'gen-candidate-questions':
+                        generateCandidateQuestions();
+                        break;
+                    case 'gen-plan':
+                        generatePlan();
+                        break;
+                    case 'set-quick-question':
+                        if (el.dataset.question) setQuickQuestion(el.dataset.question);
+                        break;
+                    case 'assistant-respond':
+                        generateAssistantResponse();
+                        break;
+                    case 'gen-thank-you':
+                        generateThankYou();
+                        break;
+                    case 'gen-panelist-question':
+                        if (el.dataset.name) generatePanelistQuestion(el.dataset.name);
+                        break;
+                    case 'toggle-question':
+                        if (el.dataset.index) toggleQuestionDetail(el.dataset.index);
+                        break;
+                    case 'question-mark-practiced':
+                        if (el.dataset.index) { e.stopPropagation(); markPracticed(el.dataset.index); }
+                        break;
+                    case 'question-add-review':
+                        if (el.dataset.index) { e.stopPropagation(); addToReview(el.dataset.index); }
+                        break;
+                    case 'story-show':
+                        if (el.dataset.index) showStoryDetail(el.dataset.index);
+                        break;
+                    case 'story-enhance':
+                        if (el.dataset.index) enhanceStory(el.dataset.index);
+                        break;
+                    case 'sql-copy-example':
+                        if (el.dataset.scenario) copySQLExample(el.dataset.scenario);
+                        break;
+                }
+            });
         }
 
         // Removed duplicate switchTab (see enhanced version near end of file)
@@ -159,6 +250,40 @@
         }
 
         // Helpers to fetch text from .md/.docx/.pdf (and fallback)
+        const __scriptCache = new Map();
+        function loadScript(src) {
+            if (__scriptCache.has(src)) return __scriptCache.get(src);
+            const p = new Promise((resolve, reject) => {
+                const s = document.createElement('script');
+                s.src = src;
+                s.async = true;
+                s.onload = () => resolve();
+                s.onerror = () => reject(new Error('Failed to load ' + src));
+                document.head.appendChild(s);
+            });
+            __scriptCache.set(src, p);
+            return p;
+        }
+
+        async function ensurePapaParse() {
+            if (window.Papa) return;
+            await loadScript('https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.3.2/papaparse.min.js');
+        }
+
+        async function ensureMammoth() {
+            if (window.mammoth) return;
+            await loadScript('https://unpkg.com/mammoth/mammoth.browser.min.js');
+        }
+
+        async function ensurePdfJs() {
+            if (window.pdfjsLib) return;
+            await loadScript('https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js');
+            try {
+                if (window.pdfjsLib) {
+                    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+                }
+            } catch (e) { /* ignore */ }
+        }
         async function fetchText(path) {
             try {
                 if (path.endsWith('.md') || path.endsWith('.txt') || path.endsWith('.csv') || path.endsWith('.json')) {
@@ -170,21 +295,25 @@
                     const res = await fetch(path);
                     if (!res.ok) return '';
                     const buf = await res.arrayBuffer();
+                    await ensureMammoth();
                     if (window.mammoth && mammoth.extractRawText) {
                         const { value } = await mammoth.extractRawText({ arrayBuffer: buf });
                         return value || '';
                     }
                     return '';
                 }
-                if (path.endsWith('.pdf') && window.pdfjsLib) {
-                    const doc = await pdfjsLib.getDocument(path).promise;
-                    let text = '';
-                    for (let i = 1; i <= doc.numPages; i++) {
-                        const page = await doc.getPage(i);
-                        const content = await page.getTextContent();
-                        text += '\n' + content.items.map(it => it.str).join(' ');
+                if (path.endsWith('.pdf')) {
+                    await ensurePdfJs();
+                    if (window.pdfjsLib) {
+                        const doc = await pdfjsLib.getDocument(path).promise;
+                        let text = '';
+                        for (let i = 1; i <= doc.numPages; i++) {
+                            const page = await doc.getPage(i);
+                            const content = await page.getTextContent();
+                            text += '\n' + content.items.map(it => it.str).join(' ');
+                        }
+                        return text;
                     }
-                    return text;
                 }
                 const res = await fetch(path);
                 if (res.ok) return await res.text();
@@ -243,6 +372,7 @@
                     
                     // Check if this is a CSV file with questions
                     if (file.name.toLowerCase().includes('questions') && file.name.endsWith('.csv')) {
+                        await ensurePapaParse();
                         // Parse CSV for questions
                         const results = Papa.parse(content, {
                             header: true,
@@ -744,7 +874,7 @@
                             ${p.talkingPoints.map(tp => `<li>${tp}</li>`).join('')}
                         </ul>
                     </div>` : ''}
-                    <button class="btn btn-primary" style="width: 100%;" onclick="generatePanelistQuestion('${p.name.replace(/'/g, "\\'")}')">
+                    <button class="btn btn-primary" style="width: 100%;" data-action="gen-panelist-question" data-name="${p.name.replace(/'/g, "&apos;")}">
                         <span>✨</span> Generate a question
                         <span class="ai-badge">AI</span>
                     </button>
@@ -789,12 +919,11 @@
                 // Confidence level styling
                 const confidenceColor = q.confidence >= 90 ? '#22c55e' : q.confidence >= 80 ? '#f59e0b' : '#ef4444';
                 const confidenceText = q.confidence >= 90 ? 'HIGH' : q.confidence >= 80 ? 'MED' : 'LOW';
+                const idx = filtered.indexOf(q);
                 
                 return `
                     <div class="question-item" style="background: white; border-radius: 0.75rem; padding: 1.25rem; margin-bottom: 1rem; box-shadow: 0 1px 3px rgba(0,0,0,0.1); border: 1px solid #e2e8f0; transition: all 0.3s ease; cursor: pointer;" 
-                         onclick="toggleQuestionDetail(${filtered.indexOf(q)})" 
-                         onmouseover="this.style.boxShadow='0 4px 12px rgba(0,0,0,0.15)'; this.style.transform='translateY(-2px)'" 
-                         onmouseout="this.style.boxShadow='0 1px 3px rgba(0,0,0,0.1)'; this.style.transform='translateY(0)'">
+                         data-action="toggle-question" data-index="${idx}">
                         
                         <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 1rem;">
                             <div style="flex: 1;">
@@ -814,12 +943,12 @@
                                     <div style="flex: 1;">
                                         <h3 style="font-weight: 600; margin-bottom: 0.5rem; color: #1e293b; font-size: 1.1rem; line-height: 1.4;">${q.question}</h3>
                                     </div>
-                                    <div style="color: #9ca3af; font-size: 1.2rem; transition: transform 0.3s ease;" id="chevron-${filtered.indexOf(q)}">▶</div>
+                                    <div style="color: #9ca3af; font-size: 1.2rem; transition: transform 0.3s ease;" id="chevron-${idx}">▶</div>
                                 </div>
                             </div>
                         </div>
                         
-                        <div id="question-detail-${filtered.indexOf(q)}" style="display: none; margin-top: 1rem; padding-top: 1rem; border-top: 1px solid #e5e7eb;">
+                        <div id="question-detail-${idx}" style="display: none; margin-top: 1rem; padding-top: 1rem; border-top: 1px solid #e5e7eb;">
                             ${q.prepNotes ? `<div style="background: linear-gradient(135deg, #fef3c7, #fde68a); padding: 0.75rem; border-radius: 0.5rem; margin-bottom: 1rem; border-left: 4px solid #f59e0b;">
                                 <strong style="color: #92400e;">💡 What This Tests:</strong>
                                 <div style="margin-top: 0.5rem; color: #78350f;">${q.prepNotes}</div>
@@ -845,11 +974,11 @@
                             
                             <div style="display: flex; gap: 0.5rem; margin-top: 1rem;">
                                 <button class="btn btn-sm" style="background: #10b981; color: white; padding: 0.5rem 1rem; border: none; border-radius: 0.375rem; font-size: 0.875rem; cursor: pointer;" 
-                                        onclick="markPracticed(${filtered.indexOf(q)}); event.stopPropagation();">
+                                        data-action="question-mark-practiced" data-index="${idx}">
                                     ✅ Mark as Practiced
                                 </button>
                                 <button class="btn btn-sm" style="background: #f59e0b; color: white; padding: 0.5rem 1rem; border: none; border-radius: 0.375rem; font-size: 0.875rem; cursor: pointer;" 
-                                        onclick="addToReview(${filtered.indexOf(q)}); event.stopPropagation();">
+                                        data-action="question-add-review" data-index="${idx}">
                                     📌 Add to Review
                                 </button>
                             </div>
@@ -876,7 +1005,7 @@
             
             container.innerHTML = appState.extractedData.stories.map((story, index) => `
                 <div style="padding: 1rem; background: #f8fafc; border-radius: 0.5rem; margin-bottom: 1rem; cursor: pointer;" 
-                     onclick="showStoryDetail(${index})">
+                     data-action="story-show" data-index="${index}">
                     <div style="display: flex; justify-content: space-between; align-items: start;">
                         <div style="flex: 1;">
                             <h4 style="font-weight: 600;">${story.title}</h4>
@@ -928,7 +1057,7 @@
                         <strong>📊 Enhanced Metrics:</strong> ${story.additionalMetrics}
                     </div>
                 ` : ''}
-                <button class="btn btn-primary" style="margin-top: 1rem;" onclick="enhanceStory(${index})">
+                <button class="btn btn-primary" style="margin-top: 1rem;" data-action="story-enhance" data-index="${index}">
                     <span>✨</span> ${story.additionalMetrics ? 'Re-enhance' : 'Enhance this'} Story
                     <span class="ai-badge">AI</span>
                 </button>
@@ -996,6 +1125,7 @@
         // Function to load questions from CSV file
         async function loadQuestionsFromCSV() {
             try {
+                await ensurePapaParse();
                 const response = await fetch('input_files/anticipated_questions_google_play_bi.csv');
                 const csvText = await response.text();
                 
@@ -2408,8 +2538,8 @@
                     console.log(`✅ Loaded ${questions.length} questions from Q&A Bank`);
                 } else {
                     console.log('📋 Fallback to CSV questions...');
-                    const questionsFromCSV = await loadQuestionsFromCSV();
-                    questions = questionsFromCSV;
+                const questionsFromCSV = await loadQuestionsFromCSV();
+                questions = questionsFromCSV;
                     console.log(`✅ Loaded ${questions.length} questions from CSV`);
                 }
                 
@@ -3144,7 +3274,7 @@ GROUP BY m.member_id, total_points, tier_min_points, tier_max_points, last_activ
                         </ul>
                     </div>
                     
-                    <button class="btn btn-primary" onclick="copySQLExample('${scenarioType}')">
+                    <button class="btn btn-primary" data-action="sql-copy-example" data-scenario="${scenarioType}">
                         📋 Copy SQL to Editor
                     </button>
                 </div>
@@ -3325,7 +3455,7 @@ GROUP BY m.member_id, total_points, tier_min_points, tier_max_points, last_activ
                     <div style="color: #64748b;">GROUP BY previous_tier, current_tier;</div>
                 </div>
                 
-                <button class="btn btn-secondary" style="width: 100%; margin-top: 0.5rem;" onclick="copySQLExample('example1')">
+                <button class="btn btn-secondary" style="width: 100%; margin-top: 0.5rem;" data-action="sql-copy-example" data-scenario="example1">
                     📋 Copy This Example
                 </button>
             `;

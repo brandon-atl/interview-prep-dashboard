@@ -6,39 +6,37 @@
         <title>Master Interview Prep Dashboard</title>
         <script src="https://cdn.tailwindcss.com" defer></script>
         <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/4.3.0/marked.min.js" defer></script>
-        <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.3.2/papaparse.min.js" defer></script>
-        <script src="https://unpkg.com/mammoth/mammoth.browser.min.js" defer></script>
-        <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js" defer></script>
+        <!-- Feature libs are lazy-loaded in app.js when needed: PapaParse, Mammoth, PDF.js -->
         <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js" defer></script>
         <link rel="stylesheet" href="assets/css/styles.css">
 </head>
 <body>
     <!-- Mobile Navigation Toggle -->
-    <button class="mobile-nav-toggle" onclick="toggleMobileNav()">
+    <button class="mobile-nav-toggle" data-action="mobile-nav-open">
         ☰
     </button>
     
     <!-- Mobile Navigation Overlay -->
-    <div class="mobile-nav-overlay" onclick="closeMobileNav()"></div>
+    <div class="mobile-nav-overlay" data-action="mobile-nav-close"></div>
     
     <!-- Mobile Navigation Menu -->
     <div class="mobile-nav-menu">
         <div class="mobile-nav-header">
             <h3>Navigation</h3>
-            <button class="mobile-nav-close" onclick="closeMobileNav()">×</button>
+            <button class="mobile-nav-close" data-action="mobile-nav-close">×</button>
         </div>
         <div class="mobile-nav-items">
-            <div class="mobile-nav-item" data-tab="upload" onclick="switchTabMobile('upload')">📤 Upload Files</div>
-            <div class="mobile-nav-item" data-tab="command" onclick="switchTabMobile('command')">🚀 Command Center</div>
-            <div class="mobile-nav-item" data-tab="intel" onclick="switchTabMobile('intel')">🏢 Company Intel</div>
-            <div class="mobile-nav-item" data-tab="panel" onclick="switchTabMobile('panel')">👥 Panel Strategy</div>
-            <div class="mobile-nav-item" data-tab="questions" onclick="switchTabMobile('questions')">❓ Q&A Bank</div>
-            <div class="mobile-nav-item" data-tab="stories" onclick="switchTabMobile('stories')">⭐ STAR Stories</div>
-            <div class="mobile-nav-item" data-tab="sql" onclick="switchTabMobile('sql')">📊 SQL Practice</div>
-            <div class="mobile-nav-item" data-tab="warroom" onclick="switchTabMobile('warroom')">⚔️ War Room</div>
-            <div class="mobile-nav-item" data-tab="plan" onclick="switchTabMobile('plan')">📅 90-Day Plan</div>
-            <div class="mobile-nav-item" data-tab="assistant" onclick="switchTabMobile('assistant')">🤖 AI Assistant</div>
-            <div class="mobile-nav-item" data-tab="debrief" onclick="switchTabMobile('debrief')">✍️ Debrief</div>
+            <div class="mobile-nav-item" data-tab="upload" data-action="mobile-nav-switch">📤 Upload Files</div>
+            <div class="mobile-nav-item" data-tab="command" data-action="mobile-nav-switch">🚀 Command Center</div>
+            <div class="mobile-nav-item" data-tab="intel" data-action="mobile-nav-switch">🏢 Company Intel</div>
+            <div class="mobile-nav-item" data-tab="panel" data-action="mobile-nav-switch">👥 Panel Strategy</div>
+            <div class="mobile-nav-item" data-tab="questions" data-action="mobile-nav-switch">❓ Q&A Bank</div>
+            <div class="mobile-nav-item" data-tab="stories" data-action="mobile-nav-switch">⭐ STAR Stories</div>
+            <div class="mobile-nav-item" data-tab="sql" data-action="mobile-nav-switch">📊 SQL Practice</div>
+            <div class="mobile-nav-item" data-tab="warroom" data-action="mobile-nav-switch">⚔️ War Room</div>
+            <div class="mobile-nav-item" data-tab="plan" data-action="mobile-nav-switch">📅 90-Day Plan</div>
+            <div class="mobile-nav-item" data-tab="assistant" data-action="mobile-nav-switch">🤖 AI Assistant</div>
+            <div class="mobile-nav-item" data-tab="debrief" data-action="mobile-nav-switch">✍️ Debrief</div>
         </div>
     </div>
 
@@ -97,11 +95,11 @@
                     <div id="fileList" style="margin-top: 1rem;"></div>
                     
                     <div style="margin-top: 1rem;">
-                        <button class="btn btn-primary" onclick="processFiles()">
+                        <button class="btn btn-primary" data-action="process-files">
                             <span id="processBtnIcon">✨</span>
                             <span id="processBtnText">Process Files</span>
                         </button>
-                        <button class="btn btn-secondary" style="margin-left: 0.5rem;" onclick="loadSampleData()">
+                        <button class="btn btn-secondary" style="margin-left: 0.5rem;" data-action="load-sample">
                             <span>📁</span> Load From input_files
                         </button>
                     </div>
@@ -128,7 +126,7 @@
                     <div id="powerIntro" class="prose">
                         <p style="color: #64748b;">Upload your materials to generate your personalized elevator pitch</p>
                     </div>
-                    <button class="btn btn-primary" style="margin-top: 1rem;" onclick="generatePowerIntro()">
+                    <button class="btn btn-primary" style="margin-top: 1rem;" data-action="gen-power-intro">
                         <span>✨</span> Generate Power Intro
                         <span class="ai-badge">AI</span>
                     </button>
@@ -139,7 +137,7 @@
                     <div id="talkingPoints" class="prose">
                         <p style="color: #64748b;">Generated from your materials</p>
                     </div>
-                    <button class="btn btn-primary" style="margin-top: 1rem;" onclick="generateTalkingPoints()">
+                    <button class="btn btn-primary" style="margin-top: 1rem;" data-action="gen-talking-points">
                         <span>✨</span> Generate Points
                         <span class="ai-badge">AI</span>
                     </button>
@@ -158,7 +156,7 @@
                         <div id="gapsList">
                             <!-- Gaps will be populated here -->
                         </div>
-                        <button class="btn btn-primary" style="margin-top: 1rem;" onclick="generateGapStrategies()">
+                        <button class="btn btn-primary" style="margin-top: 1rem;" data-action="gen-gap-strategies">
                             <span>💡</span> Get Strategies
                             <span class="ai-badge">AI</span>
                         </button>
@@ -190,7 +188,7 @@
                     <div id="culturalFit" class="prose">
                         <!-- Cultural analysis will be populated here -->
                     </div>
-                    <button class="btn btn-primary" style="margin-top: 1rem;" onclick="generateCulturalAnalysis()">
+                    <button class="btn btn-primary" style="margin-top: 1rem;" data-action="gen-cultural">
                         <span>🎯</span> Generate Analysis
                         <span class="ai-badge">AI</span>
                     </button>
@@ -218,7 +216,7 @@
                             <option value="Technical Expert">Technical Expert</option>
                         </select>
                     </div>
-                    <button class="btn btn-primary" onclick="addPanelist()">
+                    <button class="btn btn-primary" data-action="add-panelist">
                         <span>➕</span> Add Panelist
                     </button>
                 </div>
@@ -270,7 +268,7 @@
                             <option value="brian">Brian Mauch</option>
                             <option value="jolly">Jolly Jayaprakash</option>
                         </select>
-                        <button class="btn btn-primary" onclick="generateMoreQuestions()">
+                        <button class="btn btn-primary" data-action="gen-more-questions">
                             <span>✨</span> AI Generate
                             <span class="ai-badge">AI</span>
                         </button>
@@ -279,19 +277,19 @@
 
                 <!-- Quick Access Categories -->
                 <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; margin-bottom: 2rem;">
-                    <button class="btn" style="background: #dc2626; color: white; padding: 1rem; text-align: left;" onclick="filterQuestions('technical')">
+                    <button class="btn" style="background: #dc2626; color: white; padding: 1rem; text-align: left;" data-action="filter-questions" data-category="technical">
                         <div><strong>🔧 Technical Deep-Dive</strong></div>
                         <div style="font-size: 0.875rem; opacity: 0.9;">SQL, BigQuery, optimization</div>
                     </button>
-                    <button class="btn" style="background: #059669; color: white; padding: 1rem; text-align: left;" onclick="filterQuestions('situational')">
+                    <button class="btn" style="background: #059669; color: white; padding: 1rem; text-align: left;" data-action="filter-questions" data-category="situational">
                         <div><strong>🎯 Business Scenarios</strong></div>
                         <div style="font-size: 0.875rem; opacity: 0.9;">Churn, tier progression, KPIs</div>
                     </button>
-                    <button class="btn" style="background: #7c3aed; color: white; padding: 1rem; text-align: left;" onclick="filterQuestions('behavioral')">
+                    <button class="btn" style="background: #7c3aed; color: white; padding: 1rem; text-align: left;" data-action="filter-questions" data-category="behavioral">
                         <div><strong>👤 STAR Stories</strong></div>
                         <div style="font-size: 0.875rem; opacity: 0.9;">Experience, challenges, results</div>
                     </button>
-                    <button class="btn" style="background: #0ea5e9; color: white; padding: 1rem; text-align: left;" onclick="filterQuestions('company')">
+                    <button class="btn" style="background: #0ea5e9; color: white; padding: 1rem; text-align: left;" data-action="filter-questions" data-category="company">
                         <div><strong>🏢 Google Culture</strong></div>
                         <div style="font-size: 0.875rem; opacity: 0.9;">Values, goals, contractor fit</div>
                     </button>
@@ -365,16 +363,16 @@
                     <div class="card">
                         <h3 style="font-size: 1.25rem; font-weight: 600; margin-bottom: 1rem;">🔥 Interview Scenarios</h3>
                         <div style="display: flex; flex-direction: column; gap: 0.5rem;">
-                            <button class="btn" style="background: #ef4444; color: white; text-align: left; padding: 0.75rem;" onclick="loadScenario('churn')">
+                            <button class="btn" style="background: #ef4444; color: white; text-align: left; padding: 0.75rem;" data-action="load-sql-scenario" data-scenario="churn">
                                 <strong>🚨 Churn Investigation:</strong> 15% spike in Gold tier churn
                             </button>
-                            <button class="btn" style="background: #f59e0b; color: white; text-align: left; padding: 0.75rem;" onclick="loadScenario('progression')">
+                            <button class="btn" style="background: #f59e0b; color: white; text-align: left; padding: 0.75rem;" data-action="load-sql-scenario" data-scenario="progression">
                                 <strong>📈 Priority Challenge:</strong> 65% Gold→Platinum drop-off analysis
                             </button>
-                            <button class="btn" style="background: #10b981; color: white; text-align: left; padding: 0.75rem;" onclick="loadScenario('optimization')">
+                            <button class="btn" style="background: #10b981; color: white; text-align: left; padding: 0.75rem;" data-action="load-sql-scenario" data-scenario="optimization">
                                 <strong>⚡ Query Optimization:</strong> 10min → 30sec performance
                             </button>
-                            <button class="btn" style="background: #8b5cf6; color: white; text-align: left; padding: 0.75rem;" onclick="loadScenario('segmentation')">
+                            <button class="btn" style="background: #8b5cf6; color: white; text-align: left; padding: 0.75rem;" data-action="load-sql-scenario" data-scenario="segmentation">
                                 <strong>🎯 Member Segmentation:</strong> Behavioral clustering
                             </button>
                         </div>
@@ -422,10 +420,10 @@ WHERE days_to_promotion BETWEEN 1 AND 365  -- Filter unrealistic projections
 GROUP BY tier_level;"></textarea>
                         
                         <div style="display: flex; gap: 0.5rem; margin-top: 1rem;">
-                            <button class="btn btn-primary" style="flex: 1;" onclick="validateSQLSolution()">
+                            <button class="btn btn-primary" style="flex: 1;" data-action="validate-sql">
                                 <span>🔍</span> Validate Solution
                             </button>
-                            <button class="btn btn-secondary" style="flex: 1;" onclick="optimizeSQL()">
+                            <button class="btn btn-secondary" style="flex: 1;" data-action="optimize-sql">
                                 <span>📈</span> Optimize Query
                             </button>
                         </div>
@@ -479,7 +477,7 @@ GROUP BY tier_level;"></textarea>
                             </div>
                         </div>
                         
-                        <button class="btn" style="background: #6366f1; color: white; width: 100%; margin-top: 1rem;" onclick="showExampleSolutions()">
+                        <button class="btn" style="background: #6366f1; color: white; width: 100%; margin-top: 1rem;" data-action="show-sql-examples">
                             <span>💡</span> Show Example Solutions
                         </button>
                         <div id="exampleSolutions" style="margin-top: 1rem; display: none;"></div>
@@ -495,7 +493,7 @@ GROUP BY tier_level;"></textarea>
                     <h3 style="font-size: 1.25rem; font-weight: 600; margin-bottom: 1rem;">Rebuttal Strategy Practice</h3>
                     <label style="display: block; margin-bottom: 0.5rem; font-weight: 500;">Enter a tough interview question:</label>
                     <textarea id="toughQuestion" rows="3" class="input-field" placeholder="e.g., 'Why should we hire you over someone with more industry experience?'"></textarea>
-                    <button class="btn btn-primary" style="margin-top: 1rem;" onclick="generateRebuttal()">
+                    <button class="btn btn-primary" style="margin-top: 1rem;" data-action="gen-rebuttal">
                         <span>✨</span> Generate Rebuttal Strategy
                         <span class="ai-badge">AI</span>
                     </button>
@@ -610,7 +608,7 @@ GROUP BY tier_level</code></pre>
                 
                 <div class="card">
                     <h3 style="font-size: 1.25rem; font-weight: 600; margin-bottom: 1rem;">Questions to Ask Interviewers</h3>
-                    <button class="btn btn-primary" onclick="generateCandidateQuestions()">
+                    <button class="btn btn-primary" data-action="gen-candidate-questions">
                         <span>✨</span> Generate Questions to Ask
                         <span class="ai-badge">AI</span>
                     </button>
@@ -623,7 +621,7 @@ GROUP BY tier_level</code></pre>
                 <h2 style="font-size: 1.5rem; font-weight: 600; margin-bottom: 1.5rem; text-align: center;">AI-Generated 30-60-90 Day Plan</h2>
                 
                 <div class="card">
-                    <button class="btn btn-primary" style="margin-bottom: 1.5rem;" onclick="generatePlan()">
+                    <button class="btn btn-primary" style="margin-bottom: 1.5rem;" data-action="gen-plan">
                         <span>✨</span> Generate AI Plan
                         <span class="ai-badge">AI</span>
                     </button>
@@ -647,21 +645,21 @@ GROUP BY tier_level</code></pre>
                     </div>
                     
                     <div style="display: flex; gap: 1rem; margin-bottom: 1rem; flex-wrap: wrap;">
-                        <button class="btn btn-secondary" onclick="setQuickQuestion('What should I emphasize most about my background for this role?')">
+                        <button class="btn btn-secondary" data-action="set-quick-question" data-question="What should I emphasize most about my background for this role?">
                             Background Focus
                         </button>
-                        <button class="btn btn-secondary" onclick="setQuickQuestion('How do I best connect my experience to Google Play specific challenges?')">
+                        <button class="btn btn-secondary" data-action="set-quick-question" data-question="How do I best connect my experience to Google Play specific challenges?">
                             Role Connection
                         </button>
-                        <button class="btn btn-secondary" onclick="setQuickQuestion('What are the most important questions I should ask the interviewers?')">
+                        <button class="btn btn-secondary" data-action="set-quick-question" data-question="What are the most important questions I should ask the interviewers?">
                             Questions to Ask
                         </button>
-                        <button class="btn btn-secondary" onclick="setQuickQuestion('How should I handle concerns about being a contractor vs full-time employee?')">
+                        <button class="btn btn-secondary" data-action="set-quick-question" data-question="How should I handle concerns about being a contractor vs full-time employee?">
                             Contractor Concerns
                         </button>
                     </div>
                     
-                    <button class="btn btn-primary" onclick="generateAssistantResponse()">
+                    <button class="btn btn-primary" data-action="assistant-respond">
                         <span>✨</span> Get AI Guidance
                         <span class="ai-badge">AI</span>
                     </button>
@@ -709,7 +707,7 @@ GROUP BY tier_level</code></pre>
                             <!-- Will be populated with panelists -->
                         </select>
                     </div>
-                    <button class="btn btn-primary" style="width: 100%; margin-top: 1rem;" onclick="generateThankYou()">
+                    <button class="btn btn-primary" style="width: 100%; margin-top: 1rem;" data-action="gen-thank-you">
                         <span>✨</span> Generate Thank-You Note
                         <span class="ai-badge">AI</span>
                     </button>
