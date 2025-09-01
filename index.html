@@ -4,11 +4,12 @@
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>Master Interview Prep Dashboard</title>
-        <script src="https://cdn.tailwindcss.com"></script>
-        <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/4.3.0/marked.min.js"></script>
-        <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.3.2/papaparse.min.js"></script>
-        <script src="https://unpkg.com/mammoth/mammoth.browser.min.js"></script>
-        <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+        <script src="https://cdn.tailwindcss.com" defer></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/4.3.0/marked.min.js" defer></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.3.2/papaparse.min.js" defer></script>
+        <script src="https://unpkg.com/mammoth/mammoth.browser.min.js" defer></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js" defer></script>
+        <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js" defer></script>
         <style>
         * {
             margin: 0;
@@ -1519,7 +1520,7 @@ GROUP BY tier_level</code></pre>
             // Initialize countdown
             initializeInterviewCountdown();
             
-            // Try to load sample data automatically
+            // Try to load sample data automatically (single attempt)
             console.log('🔄 Auto-loading sample data...');
             try {
                 await loadSampleData();
@@ -1548,12 +1549,7 @@ GROUP BY tier_level</code></pre>
                     pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
                 } catch (e) { /* ignore */ }
             }
-            // Auto-extract from input_files so the dashboard is immediately useful
-            try {
-                await loadSampleData();
-            } catch (e) {
-                updateDataStatus('Could not load data from input_files. Please try again.', 'warning');
-            }
+            // Removed duplicate auto-load of sample data to avoid double work
         });
 
         async function initializeDashboard() {
@@ -1608,17 +1604,7 @@ GROUP BY tier_level</code></pre>
             }
         }
 
-        function switchTab(tabName) {
-            document.querySelectorAll('.tab-btn').forEach(btn => {
-                btn.classList.toggle('active', btn.dataset.tab === tabName);
-            });
-            
-            document.querySelectorAll('.tab-content').forEach(content => {
-                content.classList.toggle('active', content.id === tabName);
-            });
-            
-            appState.currentTab = tabName;
-        }
+        // Removed duplicate switchTab (see enhanced version near end of file)
 
         function updateDataStatus(message, type = 'info') {
             const statusDiv = document.getElementById('dataStatus');
@@ -2096,7 +2082,15 @@ GROUP BY tier_level</code></pre>
                     
                     briefingDiv.innerHTML = briefingHTML;
                 } else if (data.companyIntel) {
-                    briefingDiv.innerHTML = marked.parse(data.companyIntel);
+                    // Safely render markdown with sanitization when available
+                    if (window.DOMPurify && window.marked) {
+                        briefingDiv.innerHTML = DOMPurify.sanitize(marked.parse(data.companyIntel));
+                    } else if (window.marked) {
+                        briefingDiv.innerHTML = marked.parse(data.companyIntel);
+                    } else {
+                        // Fallback: plain text
+                        briefingDiv.textContent = data.companyIntel;
+                    }
                 }
             }
 
@@ -2335,15 +2329,7 @@ GROUP BY tier_level</code></pre>
             }
         }
 
-        function getCategoryColor(category) {
-            const colors = {
-                behavioral: '#4f46e5',
-                technical: '#22c55e',
-                situational: '#f59e0b',
-                company: '#3b82f6'
-            };
-            return colors[category] || '#7c3aed';
-        }
+        // Removed duplicate getCategoryColor (see consolidated version below)
 
         function updateStarStories() {
             const container = document.getElementById('storyList');
@@ -6442,8 +6428,8 @@ ${highlights.join('\n')}
 
         // Interview Countdown Function
         function initializeInterviewCountdown() {
-            // Interview date: Tuesday, September 2, 2025 | 12:30 PM EDT
-            const interviewDate = new Date('September 2, 2025 12:30:00 EDT');
+            // Interview date (ISO string for reliable parsing across browsers/timezones)
+            const interviewDate = new Date('2025-09-02T12:30:00-04:00');
             
             function updateCountdown() {
                 const now = new Date();
