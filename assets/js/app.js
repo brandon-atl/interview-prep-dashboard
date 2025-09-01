@@ -46,6 +46,8 @@
 
         // Initialize
 document.addEventListener('DOMContentLoaded', async function() {
+            // Expose state for helpers that read window.appState
+            try { window.appState = appState; } catch (e) { /* ignore */ }
             setupEventListeners();
             
             // Initialize metrics immediately
@@ -54,14 +56,32 @@ document.addEventListener('DOMContentLoaded', async function() {
             // Initialize countdown
             initializeInterviewCountdown();
             
-            // Try to load sample data automatically (single attempt)
-            console.log('🔄 Auto-loading sample data...');
-            try {
-                await loadSampleData();
-                console.log('✅ Sample data loaded successfully');
-            } catch (error) {
-                console.log('⚠️ Could not auto-load data:', error.message);
-                // Initialize with minimal state
+            // Auto-load sample data only when not running from file:// (Chrome blocks file fetch)
+            if (location.protocol !== 'file:') {
+                console.log('🔄 Auto-loading sample data...');
+                try {
+                    await loadSampleData();
+                    console.log('✅ Sample data loaded successfully');
+                } catch (error) {
+                    console.log('⚠️ Could not auto-load data:', error.message);
+                    // Initialize with minimal state
+                    appState.extractedData = {
+                        company: 'Google Play',
+                        role: 'BI Data Analyst', 
+                        questions: [],
+                        stories: [],
+                        panelists: [],
+                        metrics: getDefaultMetrics(),
+                        strengths: ['Advanced SQL & BigQuery optimization', 'Large-scale data processing'],
+                        gaps: ['Google Cloud Platform experience', 'Play Points domain knowledge'],
+                        companyIntel: 'Click "Load From input_files" to load your interview materials.',
+                        culturalNotes: 'Google Play cultural insights will load with your files.'
+                    };
+                    updateDashboard();
+                    updateDataStatus('Dashboard ready. Click "Load From input_files" to load your materials.', 'info');
+                }
+            } else {
+                // Local file mode: skip auto-load to avoid CORS errors, show ready state
                 appState.extractedData = {
                     company: 'Google Play',
                     role: 'BI Data Analyst', 
@@ -71,11 +91,11 @@ document.addEventListener('DOMContentLoaded', async function() {
                     metrics: getDefaultMetrics(),
                     strengths: ['Advanced SQL & BigQuery optimization', 'Large-scale data processing'],
                     gaps: ['Google Cloud Platform experience', 'Play Points domain knowledge'],
-                    companyIntel: 'Click "Load From input_files" to load your interview materials.',
-                    culturalNotes: 'Google Play cultural insights will load with your files.'
+                    companyIntel: 'Use "Process Files" to ingest your documents. "Load From input_files" requires running via a local server or Vercel.',
+                    culturalNotes: ''
                 };
                 updateDashboard();
-                updateDataStatus('Dashboard ready. Click "Load From input_files" to load your materials.', 'info');
+                updateDataStatus('Local file mode: processing ready. Loading from input_files requires a server.', 'info');
             }
             
             // PDF.js worker is configured when the library is lazy-loaded
@@ -151,7 +171,11 @@ document.addEventListener('DOMContentLoaded', async function() {
                         processFiles();
                         break;
                     case 'load-sample':
-                        loadSampleData();
+                        if (location.protocol === 'file:') {
+                            showToast('Loading from input_files requires running from a local server or Vercel due to browser security.', 'warning');
+                        } else {
+                            loadSampleData();
+                        }
                         break;
                     case 'gen-power-intro':
                         generatePowerIntro();
