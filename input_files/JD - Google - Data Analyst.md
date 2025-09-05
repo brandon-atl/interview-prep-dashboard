@@ -4,14 +4,11 @@
 **Pay**: \$55/hr. W2 incl. benefits
 
 **Company**: Google
-**Interview Date:** Tuesday, September 2, 2025 | 12:30 PM EDT
+**Interview Date:** Tuesday, September 4, 2025 | 5:00 PM EDT
 **Interviewer(s):**
 
 -   Nikki Diman (Primary) - <ndiman@xwf.google.com>
 
--   Brian Mauch (Optional) - <brian.mauch@scalence.com>
-
--   Jolly Jayaprakash (Recruiter) - <jolly.jayaprakash@scalence.com>
 
 **PROJECT SUMMARY:**
 

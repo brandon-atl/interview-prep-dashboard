@@ -156,6 +156,12 @@
             box-shadow: 0 1px 3px rgba(0,0,0,0.1);
         }
 
+        .tab-btn.disabled {
+            opacity: 0.5;
+            pointer-events: none;
+            cursor: not-allowed;
+        }
+
         .tab-content {
             display: none;
             padding: 2rem;

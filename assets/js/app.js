@@ -3,6 +3,9 @@
             currentTab: 'upload',
             uploadedFiles: [],
             fileContents: {},
+            dataLoaded: false,
+            hasSQL: false,
+            sqlSnippets: [],
             extractedData: {
                 company: '',
                 role: '',
@@ -18,72 +21,26 @@
             }
         };
 
-        // Initialize metrics immediately on page load
-        function initializeMetrics() {
-            console.log('Initializing metrics on page load');
-            const metricsContainer = document.getElementById('keyMetrics');
-            if (metricsContainer) {
-                const defaultMetrics = getDefaultMetrics();
-                const colors = ['#4f46e5', '#22c55e', '#f59e0b', '#8b5cf6', '#0ea5e9', '#ec4899', '#14b8a6'];
-                
-                metricsContainer.innerHTML = defaultMetrics.map((metric, index) => {
-                    const bgColor = `linear-gradient(135deg, ${colors[index % colors.length]} 0%, ${colors[(index + 1) % colors.length]} 100%)`;
-                    return `
-                        <div class="metric-tile" style="background: ${bgColor};">
-                            <div style="font-size: 2rem; font-weight: 700; margin-bottom: 0.5rem; z-index: 2;">${metric.value}</div>
-                            ${metric.growth ? `<div style="font-size: 0.875rem; opacity: 0.9; margin-bottom: 0.5rem; z-index: 2;">${metric.growth}</div>` : ''}
-                            <div style="font-size: 0.875rem; font-weight: 600; margin-bottom: 0.25rem; z-index: 2;">${metric.label}</div>
-                            ${metric.context ? `<div style="font-size: 0.75rem; opacity: 0.8; z-index: 2;">${metric.context}</div>` : ''}
-                        </div>
-                    `;
-                }).join('');
-                
-                console.log('Metrics initialized successfully');
-            } else {
-                console.error('Metrics container not found');
-            }
-        }
+        // Metrics are not initialized on load; will render after file upload.
 
         // Initialize
 document.addEventListener('DOMContentLoaded', async function() {
             setupEventListeners();
             
-            // Initialize metrics immediately
-            setTimeout(initializeMetrics, 100);
-            
-            // Initialize countdown
-            initializeInterviewCountdown();
-            
-            // Try to load sample data automatically (single attempt)
-            console.log('🔄 Auto-loading sample data...');
-            try {
-                await loadSampleData();
-                console.log('✅ Sample data loaded successfully');
-            } catch (error) {
-                console.log('⚠️ Could not auto-load data:', error.message);
-                // Initialize with minimal state
-                appState.extractedData = {
-                    company: 'Google Play',
-                    role: 'BI Data Analyst', 
-                    questions: [],
-                    stories: [],
-                    panelists: [],
-                    metrics: getDefaultMetrics(),
-                    strengths: ['Advanced SQL & BigQuery optimization', 'Large-scale data processing'],
-                    gaps: ['Google Cloud Platform experience', 'Play Points domain knowledge'],
-                    companyIntel: 'Click "Load From input_files" to load your interview materials.',
-                    culturalNotes: 'Google Play cultural insights will load with your files.'
-                };
-                updateDashboard();
-                updateDataStatus('Dashboard ready. Click "Load From input_files" to load your materials.', 'info');
-            }
-            
+            // Disable tabs until data is uploaded
+            setTabsEnabled(false);
+            // Hide countdown until a JD file provides a date
+            const countdown = document.getElementById('interviewCountdown');
+            if (countdown) countdown.style.display = 'none';
+            updateDataStatus('Upload your materials to get started with personalized interview prep!', 'info');
             // PDF.js worker is configured when the library is lazy-loaded
-            // Removed duplicate auto-load of sample data to avoid double work
+            updateUploadChecklist();
+            updateRequiresDataVisibility();
+            updateSqlAvailabilityUI();
         });
 
         async function initializeDashboard() {
-            // Don't auto-load sample data - let user choose to upload or load sample
+            // No auto-load; require user uploads
             updateDataStatus('Upload your materials to get started with personalized interview prep!', 'info');
         }
 
@@ -91,7 +48,16 @@ document.addEventListener('DOMContentLoaded', async function() {
             // Tab navigation
             document.querySelectorAll('.tab-btn').forEach(btn => {
                 btn.addEventListener('click', function() {
-                    switchTab(this.dataset.tab);
+                    const target = this.dataset.tab;
+                    if (!appState.dataLoaded && target !== 'upload') {
+                        showToast('Please upload your files to unlock tabs.', 'warning');
+                        return;
+                    }
+                    if (target === 'sql' && !appState.hasSQL) {
+                        showToast('Upload files containing SQL to enable SQL Practice.', 'warning');
+                        return;
+                    }
+                    switchTab(target);
                 });
             });
 
@@ -132,6 +98,10 @@ document.addEventListener('DOMContentLoaded', async function() {
             if (categorySelect) {
                 categorySelect.addEventListener('change', filterQuestions);
             }
+            const interviewerSelect = document.getElementById('interviewerFilter');
+            if (interviewerSelect) {
+                interviewerSelect.addEventListener('change', filterQuestions);
+            }
             // Global delegated click handlers
             document.addEventListener('click', (e) => {
                 const el = e.target.closest('[data-action]');
@@ -145,14 +115,23 @@ document.addEventListener('DOMContentLoaded', async function() {
                         closeMobileNav();
                         break;
                     case 'mobile-nav-switch':
-                        if (el.dataset.tab) switchTabMobile(el.dataset.tab);
+                        if (el.dataset.tab) {
+                            const target = el.dataset.tab;
+                            if (!appState.dataLoaded && target !== 'upload') {
+                                showToast('Please upload your files to unlock tabs.', 'warning');
+                                return;
+                            }
+                            if (target === 'sql' && !appState.hasSQL) {
+                                showToast('Upload files containing SQL to enable SQL Practice.', 'warning');
+                                return;
+                            }
+                            switchTabMobile(target);
+                        }
                         break;
                     case 'process-files':
                         processFiles();
                         break;
-                    case 'load-sample':
-                        loadSampleData();
-                        break;
+                    // Sample loading disabled; require user uploads
                     case 'gen-power-intro':
                         generatePowerIntro();
                         break;
@@ -186,6 +165,37 @@ document.addEventListener('DOMContentLoaded', async function() {
                     case 'show-sql-examples':
                         showExampleSolutions();
                         break;
+                    case 'sql-load-snippet': {
+                        const idx = parseInt(el.dataset.index, 10);
+                        const editor = document.getElementById('sqlQuery');
+                        if (!isNaN(idx) && editor && appState.sqlSnippets && appState.sqlSnippets[idx]) {
+                            const sn = appState.sqlSnippets[idx];
+                            editor.value = sn.code;
+                            const note = document.getElementById('sqlSourceNote');
+                            if (note) note.textContent = `Source: ${(sn.source||'').split('/').pop()}`;
+                            showToast(`Loaded snippet from ${sn.source}`, 'success');
+                        }
+                        break;
+                    }
+                    case 'sql-copy-snippet': {
+                        const idx = parseInt(el.dataset.index, 10);
+                        if (!isNaN(idx) && appState.sqlSnippets && appState.sqlSnippets[idx]) {
+                            const sn = appState.sqlSnippets[idx];
+                            const text = sn.code;
+                            try {
+                                if (navigator.clipboard && navigator.clipboard.writeText) {
+                                    navigator.clipboard.writeText(text).then(()=>showToast('Snippet copied!', 'success'));
+                                } else {
+                                    const ta = document.createElement('textarea');
+                                    ta.value = text; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); document.body.removeChild(ta);
+                                    showToast('Snippet copied!', 'success');
+                                }
+                            } catch (e) {
+                                showToast('Copy failed', 'error');
+                            }
+                        }
+                        break;
+                    }
                     case 'gen-rebuttal':
                         generateRebuttal();
                         break;
@@ -195,6 +205,71 @@ document.addEventListener('DOMContentLoaded', async function() {
                     case 'gen-plan':
                         generatePlan();
                         break;
+                    case 'copy-metrics': {
+                        const metrics = Array.isArray(appState.extractedData.metrics) ? appState.extractedData.metrics : [];
+                        if (!metrics.length) { showToast('No metrics to copy', 'warning'); break; }
+                        const md = metrics.map(m => `- ${m.label}: ${m.value}${m.growth?` (${m.growth})`:''}${m.context?` — ${m.context}`:''}`).join('\n');
+                        try {
+                            if (navigator.clipboard && navigator.clipboard.writeText) {
+                                navigator.clipboard.writeText(md).then(()=>showToast('Metrics copied!', 'success'));
+                            } else {
+                                const ta = document.createElement('textarea'); ta.value = md; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); document.body.removeChild(ta); showToast('Metrics copied!', 'success');
+                            }
+                        } catch (err) { showToast('Copy failed', 'error'); }
+                        break;
+                    }
+                    case 'copy-briefing': {
+                        const md = appState.extractedData.companyIntel || '';
+                        if (!md) { showToast('No briefing to copy', 'warning'); break; }
+                        try {
+                            if (navigator.clipboard && navigator.clipboard.writeText) {
+                                navigator.clipboard.writeText(md).then(()=>showToast('Briefing copied!', 'success'));
+                            } else {
+                                const ta = document.createElement('textarea'); ta.value = md; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); document.body.removeChild(ta); showToast('Briefing copied!', 'success');
+                            }
+                        } catch (err) { showToast('Copy failed', 'error'); }
+                        break;
+                    }
+                    case 'download-briefing': {
+                        const md = appState.extractedData.companyIntel || '';
+                        if (!md) { showToast('No briefing to download', 'warning'); break; }
+                        const blob = new Blob([md], { type: 'text/markdown;charset=utf-8' });
+                        const url = URL.createObjectURL(blob);
+                        const a = document.createElement('a');
+                        a.href = url; a.download = 'briefing.md';
+                        document.body.appendChild(a); a.click(); document.body.removeChild(a);
+                        URL.revokeObjectURL(url);
+                        showToast('Briefing downloaded', 'success');
+                        break;
+                    }
+                    case 'download-snapshot': {
+                        const md = buildSnapshotMarkdown();
+                        if (!md) { showToast('Nothing to export yet', 'warning'); break; }
+                        const blob = new Blob([md], { type: 'text/markdown;charset=utf-8' });
+                        const url = URL.createObjectURL(blob);
+                        const a = document.createElement('a');
+                        a.href = url; a.download = 'dashboard_snapshot.md';
+                        document.body.appendChild(a); a.click(); document.body.removeChild(a);
+                        URL.revokeObjectURL(url);
+                        showToast('Snapshot downloaded', 'success');
+                        break;
+                    }
+                    case 'copy-snapshot': {
+                        const md = buildSnapshotMarkdown();
+                        if (!md) { showToast('Nothing to copy yet', 'warning'); break; }
+                        try {
+                            if (navigator.clipboard && navigator.clipboard.writeText) {
+                                navigator.clipboard.writeText(md).then(()=>showToast('Snapshot copied!', 'success'));
+                            } else {
+                                const ta = document.createElement('textarea'); ta.value = md; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); document.body.removeChild(ta); showToast('Snapshot copied!', 'success');
+                            }
+                        } catch (err) { showToast('Copy failed', 'error'); }
+                        break;
+                    }
+                    case 'gen-quick-tips': {
+                        updateQuickTipsFromData();
+                        break;
+                    }
                     case 'set-quick-question':
                         if (el.dataset.question) setQuickQuestion(el.dataset.question);
                         break;
@@ -284,6 +359,504 @@ GROUP BY previous_tier, current_tier;`;
                 };
                 statusDiv.innerHTML = `<p style="color: ${colors[type]};">${message}</p>`;
             }
+        }
+
+        function setTabsEnabled(enabled) {
+            const buttons = document.querySelectorAll('.tab-btn');
+            buttons.forEach(btn => {
+                const tab = btn.dataset.tab;
+                if (tab === 'upload') return;
+                if (tab === 'sql' && !appState.hasSQL) {
+                    btn.classList.add('disabled');
+                    return;
+                }
+                if (enabled) {
+                    btn.classList.remove('disabled');
+                } else {
+                    btn.classList.add('disabled');
+                }
+            });
+        }
+
+        function containsSQL(text) {
+            if (!text) return false;
+            const s = String(text);
+            const patterns = [
+                /\bSELECT\b[\s\S]*?\bFROM\b/i,
+                /\bWITH\b\s+\w+\s+AS\s*\(/i,
+                /\bJOIN\b\s+\w+/i,
+                /\bGROUP\s+BY\b/i,
+                /\bORDER\s+BY\b/i,
+                /\bCREATE\s+(TABLE|VIEW)\b/i,
+                /\bINSERT\s+INTO\b/i,
+                /\bWINDOW\b|\bOVER\s*\(/i,
+                /\bROW_NUMBER\s*\(/i
+            ];
+            return patterns.some(rx => rx.test(s));
+        }
+
+        function detectSQLInFiles() {
+            const combined = Object.values(appState.fileContents || {}).join('\n');
+            appState.hasSQL = containsSQL(combined);
+        }
+
+        function updateSqlAvailabilityUI() {
+            const showSQL = !!appState.hasSQL;
+            const tabBtn = document.querySelector('.tab-btn[data-tab="sql"]');
+            const mobileItem = document.querySelector('.mobile-nav-item[data-tab="sql"]');
+            const tabContent = document.getElementById('sql');
+            if (tabBtn) tabBtn.style.display = showSQL ? '' : 'none';
+            if (mobileItem) mobileItem.style.display = showSQL ? '' : 'none';
+            if (!showSQL) {
+                // If currently on SQL tab, redirect to upload
+                const currentActive = document.querySelector('.tab-content.active');
+                if (currentActive && currentActive.id === 'sql') {
+                    switchTab('upload');
+                }
+            }
+        }
+
+        function extractSQLBlocksFromMarkdown(text) {
+            const blocks = [];
+            if (!text) return blocks;
+            // ```sql ... ``` fenced blocks
+            const reSql = /```sql\s*([\s\S]*?)```/gi;
+            let m;
+            while ((m = reSql.exec(text)) !== null) {
+                const code = (m[1] || '').trim();
+                if (code) blocks.push(code);
+            }
+            // Generic fenced blocks; include only if they look like SQL
+            const reAny = /```\s*([\s\S]*?)```/g;
+            while ((m = reAny.exec(text)) !== null) {
+                const code = (m[1] || '').trim();
+                if (code && containsSQL(code)) blocks.push(code);
+            }
+            return blocks;
+        }
+
+        function extractInlineSQLHeuristics(text) {
+            const blocks = [];
+            if (!text) return blocks;
+            // Capture sequences starting with SELECT or WITH up to a semicolon or double newline
+            const re = /(SELECT[\s\S]*?;)|(WITH\s+[\s\S]*?;)/gi;
+            let m;
+            while ((m = re.exec(text)) !== null) {
+                const code = (m[0] || '').trim();
+                if (code && containsSQL(code)) blocks.push(code);
+            }
+            // If none found, try shorter chunks ending at blank line
+            if (blocks.length === 0) {
+                const re2 = /(SELECT|WITH)[\s\S]*?(?:\n\s*\n|$)/gi;
+                let m2;
+                while ((m2 = re2.exec(text)) !== null) {
+                    const code = (m2[0] || '').trim();
+                    if (code && containsSQL(code)) blocks.push(code);
+                }
+            }
+            return blocks;
+        }
+
+        function collectSQLSnippetsFromFiles() {
+            const snippets = [];
+            for (const [name, content] of Object.entries(appState.fileContents || {})) {
+                if (!content) continue;
+                const lower = name.toLowerCase();
+                let blocks = [];
+                if (lower.endsWith('.md') || /markdown/i.test(content.slice(0, 200))) {
+                    blocks = extractSQLBlocksFromMarkdown(content);
+                }
+                // Heuristic extraction from any text file
+                if (blocks.length === 0) {
+                    blocks = extractInlineSQLHeuristics(content);
+                }
+                blocks.forEach(code => snippets.push({ source: name, code }));
+            }
+            // De-duplicate by code content
+            const seen = new Set();
+            const unique = [];
+            for (const snip of snippets) {
+                const key = snip.code.replace(/\s+/g, ' ').trim();
+                if (!seen.has(key)) { seen.add(key); unique.push(snip); }
+            }
+            appState.sqlSnippets = unique;
+        }
+
+        function populateSQLEditorFromSnippets() {
+            const editor = document.getElementById('sqlQuery');
+            if (!editor) return;
+            if (!Array.isArray(appState.sqlSnippets) || appState.sqlSnippets.length === 0) return;
+            // Choose the longest snippet assuming it's the most complete
+            const best = appState.sqlSnippets.reduce((a, b) => (b.code.length > a.code.length ? b : a));
+            editor.value = best.code;
+            try { showToast(`Loaded SQL from ${best.source}`, 'success'); } catch (e) { /* ignore */ }
+        }
+
+        function updateSqlSnippetList() {
+            const container = document.getElementById('sqlSnippetList');
+            if (!container) return;
+            const snippets = Array.isArray(appState.sqlSnippets) ? appState.sqlSnippets : [];
+            const filterSel = document.getElementById('sqlSnippetFilter');
+            const listDiv = document.getElementById('sqlSnippetItems');
+            if (!listDiv) return;
+            if (!snippets.length) {
+                listDiv.innerHTML = '<p style="color:#64748b; font-size: 0.9rem;">No SQL snippets detected. Include ```sql fenced blocks or queries starting with SELECT/WITH in your files.</p>';
+                if (filterSel) filterSel.innerHTML = '';
+                return;
+            }
+            // Populate filter options
+            if (filterSel) {
+                const sources = Array.from(new Set(snippets.map(s => (s.source || '').split('/').pop())));
+                const current = filterSel.value || '';
+                filterSel.innerHTML = ['<option value="">All files</option>']
+                    .concat(sources.map(s => `<option value="${s}">${s}</option>`)).join('');
+                if (current) filterSel.value = current;
+            }
+            const selected = (filterSel && filterSel.value) ? filterSel.value : '';
+            const filtered = selected ? snippets.filter(s => ((s.source || '').split('/').pop()) === selected) : snippets;
+            const items = filtered.map((snip, idx) => {
+                const firstLine = (snip.code.split('\n')[0] || '').replace(/`/g,'').trim();
+                const label = firstLine.slice(0, 60) + (firstLine.length > 60 ? '…' : '');
+                const source = (snip.source || '').split('/').pop();
+                return `
+                    <div class="sql-snippet-item" style="border:1px solid #e2e8f0; border-radius:0.5rem; padding:0.5rem 0.75rem; margin:0.25rem 0; display:flex; justify-content:space-between; align-items:center; gap:0.5rem;">
+                        <div data-action="sql-load-snippet" data-index="${idx}" style="flex:1; font-family: 'Courier New', monospace; font-size: 0.85rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor:pointer;">${label}</div>
+                        <div style="display:flex; align-items:center; gap:0.5rem;">
+                            <span style="font-size:0.75rem; color:#64748b;">${source}</span>
+                            <button class="btn btn-secondary" data-action="sql-copy-snippet" data-index="${idx}" title="Copy to clipboard" style="padding:0.35rem 0.6rem;">Copy</button>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+            listDiv.innerHTML = items;
+            // Wire filter change
+            if (filterSel && !filterSel._wired) {
+                filterSel.addEventListener('change', () => updateSqlSnippetList());
+                filterSel._wired = true;
+            }
+        }
+
+        function buildSnapshotMarkdown() {
+            const d = appState.extractedData || {};
+            const title = `# Interview Prep Snapshot${(d.company||d.role)?` — ${[d.company,d.role].filter(Boolean).join(' | ')}`:''}`;
+            const tech = deriveTechStack(getCombinedContent());
+            const techMd = tech.length ? tech.map(t=>`- ${t}`).join('\n') : '- (detected from your files)';
+            const metrics = Array.isArray(d.metrics)?d.metrics:[];
+            const metricsMd = metrics.length ? metrics.map(m=>`- ${m.label}: ${m.value}${m.growth?` (${m.growth})`:''}${m.context?` — ${m.context}`:''}`).join('\n') : '- (provide metrics via CSV or docs)';
+            const strengths = Array.isArray(d.strengths)?d.strengths:[];
+            const gaps = Array.isArray(d.gaps)?d.gaps:[];
+            const strengthsMd = strengths.length ? strengths.map(s=>`- ${s}`).join('\n') : '- (no strengths extracted)';
+            const gapsMd = gaps.length ? gaps.map(g=>`- ${g}`).join('\n') : '- (no gaps extracted)';
+            const panelists = Array.isArray(d.panelists)?d.panelists:[];
+            const panelistsMd = panelists.length ? panelists.map(p=>`- ${p.name||''}${p.role?` — ${p.role}`:''}${p.archetype?` (${p.archetype})`:''}`).join('\n') : '- (no panelists extracted)';
+            const questions = Array.isArray(d.questions)?d.questions:[];
+            const qMd = questions.slice(0,10).map(q=>`- [${q.category||'general'}] ${q.question}`).join('\n') || '- (no questions extracted)';
+            const snippets = Array.isArray(appState.sqlSnippets)?appState.sqlSnippets:[];
+            const snMd = snippets.slice(0,5).map(s=>`- ${((s.code||'').split('\n')[0]||'').trim()} — ${((s.source||'').split('/').pop())}`).join('\n') || '- (no SQL detected)';
+            const intel = typeof d.companyIntel === 'string' ? d.companyIntel : '';
+
+            return [
+                title,
+                '\n## Tech Stack',
+                techMd,
+                '\n## Key Metrics',
+                metricsMd,
+                '\n## Strengths',
+                strengthsMd,
+                '\n## Potential Gaps',
+                gapsMd,
+                '\n## Panelists',
+                panelistsMd,
+                '\n## Q&A Highlights',
+                qMd,
+                '\n## SQL Snippets',
+                snMd,
+                '\n## Executive Brief',
+                intel || '_Upload company intel or playbook files to generate a briefing._'
+            ].join('\n');
+        }
+
+        function updateUploadChecklist() {
+            const files = Object.keys(appState.fileContents || {});
+            const hasJD = files.some(n => /jd/i.test(n));
+            const hasQA = files.some(n => /question|q\s*&?a|q&a/i.test(n));
+            const hasMetrics = files.some(n => /metric/i.test(n) && /\.csv$/i.test(n));
+            const hasIntel = files.some(n => /intel|playbook|strategy|brief/i.test(n));
+
+            function setCheck(id, ok) {
+                const el = document.getElementById(id);
+                if (!el) return;
+                el.style.borderLeftColor = ok ? '#22c55e' : (id === 'check-jd' ? '#ef4444' : '#eab308');
+                el.style.background = ok ? '#f0fdf4' : (id === 'check-jd' ? '#fff7ed' : '#fefce8');
+            }
+
+            setCheck('check-jd', hasJD);
+            setCheck('check-qa', hasQA);
+            setCheck('check-metrics', hasMetrics);
+            setCheck('check-intel', hasIntel);
+        }
+
+        function updateRequiresDataVisibility() {
+            const hasQuestions = Array.isArray(appState.extractedData.questions) && appState.extractedData.questions.length > 0;
+            const hasIntel = !!appState.extractedData.companyIntel;
+            const hasMetrics = Array.isArray(appState.extractedData.metrics) && appState.extractedData.metrics.length > 0;
+            const hasSQL = !!appState.hasSQL;
+            const hasStrengths = Array.isArray(appState.extractedData.strengths) && appState.extractedData.strengths.length > 0;
+            const hasGaps = Array.isArray(appState.extractedData.gaps) && appState.extractedData.gaps.length > 0;
+
+            function show(id, should) {
+                const el = document.getElementById(id);
+                if (!el) return;
+                el.style.display = should ? '' : 'none';
+            }
+
+            // Show interview context if we have any signals (populated dynamically)
+            const hasPanelists = Array.isArray(appState.extractedData.panelists) && appState.extractedData.panelists.length > 0;
+            show('interviewContextBar', appState.dataLoaded && (hasQuestions || hasIntel || hasPanelists || hasMetrics || hasStrengths));
+
+            // SQL practice only if explicit SQL was found
+            show('sqlContextCard', hasSQL);
+            show('sqlChallengesCard', hasSQL);
+            // Schema/scenarios get toggled based on derived content flags
+            const schemaCard = document.getElementById('schemaCard');
+            const scenariosCard = document.getElementById('scenariosCard');
+            if (schemaCard) schemaCard.style.display = schemaCard.dataset.hascontent === 'true' ? '' : 'none';
+            if (scenariosCard) scenariosCard.style.display = scenariosCard.dataset.hascontent === 'true' ? '' : 'none';
+
+            // Keep quick tips hidden until we generate from data
+            show('quickTipsCard', false);
+
+            // Upload tab derived sections
+            show('powerIntroCard', appState.dataLoaded);
+            show('talkingPointsCard', appState.dataLoaded);
+            show('strengthsCard', hasStrengths);
+            show('gapsCard', hasGaps);
+        }
+
+        // -------- Dynamic Section Builders (agnostic) --------
+        function getCombinedContent() {
+            return Object.values(appState.fileContents || {}).join('\n');
+        }
+
+        function deriveTechStack(text) {
+            const terms = [
+                'SQL','BigQuery','Snowflake','Redshift','PostgreSQL','MySQL','SQLite','Oracle','PL/SQL',
+                'Python','Pandas','NumPy','R','Spark','Airflow',
+                'Tableau','Looker','Power BI','PLX','dbt',
+                'GCP','Google Cloud','AWS','Azure','Databricks'
+            ];
+            const found = [];
+            const lower = (text || '').toLowerCase();
+            terms.forEach(t => { if (lower.includes(t.toLowerCase())) found.push(t); });
+            return Array.from(new Set(found));
+        }
+
+        function extractTablesFromSQLSnippets() {
+            const tables = new Set();
+            const snippets = appState.sqlSnippets || [];
+            const rx = /\b(?:FROM|JOIN)\s+([`\[]?[\w.]+[`\]]?)/gi;
+            for (const snip of snippets) {
+                let m;
+                while ((m = rx.exec(snip.code)) !== null) {
+                    let t = m[1].replace(/[`\[\]]/g,'');
+                    tables.add(t);
+                }
+            }
+            return Array.from(tables).slice(0, 20);
+        }
+
+        function updateInterviewContext() {
+            const el = document.getElementById('interviewContextBar');
+            if (!el) return;
+            const text = getCombinedContent();
+            const tech = deriveTechStack(text);
+            const metrics = appState.extractedData.metrics || [];
+            const panelists = appState.extractedData.panelists || [];
+
+            const focus = [];
+            if (tech.includes('SQL')) focus.push('SQL depth');
+            if (tech.includes('BigQuery')) focus.push('BigQuery optimization');
+            if (/segmentation|cluster/i.test(text)) focus.push('Segmentation');
+            if (/retention|churn/i.test(text)) focus.push('Retention/Churn');
+            if (/pipeline|etl|elt/i.test(text)) focus.push('Data pipelines');
+
+            const business = [];
+            const m1 = metrics.find(m => /users|members|customers/i.test(m.label));
+            const m2 = metrics.find(m => /revenue|sales|impact/i.test(m.label));
+            if (m1) business.push(`${m1.value} ${m1.label}`);
+            if (m2) business.push(`${m2.value} ${m2.label}`);
+
+            const interviewerHtml = panelists.slice(0,3).map(p => `• <strong>${p.name || ''}</strong>${p.role?': '+p.role:''}`).join('<br>');
+
+            el.innerHTML = `
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 1rem;">
+                    <div>
+                        <strong>🎯 Key Focus Areas:</strong><br>
+                        ${focus.length ? focus.map(f=>`• ${f}`).join('<br>') : '• Derived from your materials'}
+                    </div>
+                    <div>
+                        <strong>📊 Business Context:</strong><br>
+                        ${business.length ? business.map(b=>`• ${b}`).join('<br>') : '• Metrics will appear when detected'}
+                    </div>
+                    <div>
+                        <strong>👥 Interviewers:</strong><br>
+                        ${interviewerHtml || '• Add panelists via your files'}
+                    </div>
+                </div>`;
+        }
+
+        function updateSQLContextCard() {
+            const card = document.getElementById('sqlContextCard');
+            if (!card) return;
+            if (!appState.hasSQL) { card.style.display = 'none'; return; }
+            const text = getCombinedContent();
+            const metrics = appState.extractedData.metrics || [];
+            const gaps = appState.extractedData.gaps || [];
+            const panelists = appState.extractedData.panelists || [];
+            const tech = deriveTechStack(text).slice(0,6);
+            const focus = [];
+            if (tech.includes('SQL')) focus.push('SQL depth');
+            if (tech.includes('BigQuery')) focus.push('BigQuery optimization');
+            if (/segmentation|cluster/i.test(text)) focus.push('Segmentation');
+            if (/retention|churn/i.test(text)) focus.push('Retention/Churn');
+            if (/pipeline|etl|elt/i.test(text)) focus.push('Pipelines');
+
+            const scaleMetric = metrics.find(m => /users|members|customers|records|rows/i.test(m.label));
+            const scaleText = scaleMetric ? `${scaleMetric.value} ${scaleMetric.label}` : '—';
+            let queryVol = '—';
+            const volMatch = text.match(/(\d+(?:\.\d+)?\s*(?:B|M|K)\+?)\s+(queries|transactions|events|rows|records)/i);
+            if (volMatch) queryVol = `${volMatch[1]} ${volMatch[2]}`;
+            const challenge = gaps[0] || (focus[0] || '—');
+            const interviewers = panelists.slice(0,3).map(p => p.name).filter(Boolean).join(', ') || '—';
+
+            // Rewrite the inner grid content while preserving title
+            const titleEl = card.querySelector('h3');
+            if (titleEl) titleEl.textContent = '🎯 Interview Focus';
+            const grid = card.querySelector('div[style*="grid-template-columns"]');
+            if (grid) {
+                grid.innerHTML = `
+                    <div>
+                        <strong>Data Scale:</strong> ${scaleText}
+                        <br><strong>Query Volume:</strong> ${queryVol}
+                        <br><strong>Key Challenge:</strong> ${challenge}
+                    </div>
+                    <div>
+                        <strong>Tech Stack:</strong> ${tech.length?tech.join(', '):'—'}<br>
+                        <strong>Focus Areas:</strong> ${focus.length?focus.join(', '):'—'}<br>
+                        <strong>Interviewers:</strong> ${interviewers}
+                    </div>`;
+            }
+            card.style.display = '';
+        }
+
+        function updateSchemaCard() {
+            const card = document.getElementById('schemaCard');
+            if (!card) return;
+            const tables = extractTablesFromSQLSnippets();
+            if (!tables.length) { card.dataset.hascontent = 'false'; return; }
+            const container = card.querySelector('div');
+            if (container) {
+                container.innerHTML = `<div style=\"color:#10b981; margin-bottom:0.5rem;\">-- Detected Tables</div>` +
+                    tables.map(t=>`<div style=\"color:#f1f5f9;\"><strong style=\"color:#3b82f6;\">${t}</strong></div>`).join('');
+            }
+            card.dataset.hascontent = 'true';
+        }
+
+        function updateScenariosCard() {
+            const card = document.getElementById('scenariosCard');
+            if (!card) return;
+            const text = getCombinedContent();
+            const scenarios = [];
+            if (/churn|retention/i.test(text)) scenarios.push({id:'retention', label:'Retention/Churn Analysis'});
+            if (/segment|cluster/i.test(text)) scenarios.push({id:'segmentation', label:'Customer Segmentation'});
+            if (/optimi[sz]e|performance|cost/i.test(text)) scenarios.push({id:'optimization', label:'Query/Cost Optimization'});
+            if (/pipeline|etl|elt/i.test(text)) scenarios.push({id:'pipeline', label:'Pipeline Reliability'});
+            const listContainers = card.querySelectorAll('div');
+            const listContainer = listContainers && listContainers[1] ? listContainers[1] : card;
+            if (scenarios.length && listContainer) {
+                listContainer.innerHTML = scenarios.map(s => `
+                    <button class=\"btn\" style=\"background:#0ea5e9; color:white; text-align:left; padding:0.75rem;\" data-action=\"load-sql-scenario\" data-scenario=\"${s.id}\">
+                        <strong>${s.label}</strong>
+                    </button>`).join('');
+                card.dataset.hascontent = 'true';
+            } else {
+                card.dataset.hascontent = 'false';
+            }
+        }
+
+        function updateTechBadges() {
+            const wrap = document.getElementById('detectedTech');
+            if (!wrap) return;
+            const tech = deriveTechStack(getCombinedContent());
+            if (!tech.length) { wrap.innerHTML = ''; return; }
+            wrap.innerHTML = tech.map(t => `<span style="display:inline-block; padding:0.25rem 0.5rem; background:#f1f5f9; border:1px solid #e2e8f0; border-radius:9999px; font-size:0.75rem;">${t}</span>`).join(' ');
+        }
+
+        function updateQuickTipsFromData() {
+            const card = document.getElementById('quickTipsCard');
+            if (!card) return;
+            if (!appState.dataLoaded) { card.style.display = 'none'; return; }
+            const strengths = appState.extractedData.strengths || [];
+            const gaps = appState.extractedData.gaps || [];
+            const tech = deriveTechStack(getCombinedContent());
+            const doTips = [];
+            const avoidTips = [];
+            if (strengths.length) doTips.push('Quantify results with concrete metrics');
+            if (tech.length) doTips.push(`Reference your stack: ${tech.slice(0,4).join(', ')}`);
+            doTips.push('Use STAR for behavioral answers');
+            doTips.push('Tie answers to business impact');
+            doTips.push('Validate cost and performance trade-offs');
+            if (gaps.length) {
+                avoidTips.push('Over-claiming beyond your experience');
+                avoidTips.push('Ignoring mitigation steps for gaps');
+            }
+            avoidTips.push('Generic answers without concrete examples');
+            avoidTips.push('Tool name-dropping without outcomes');
+
+            // Rebuild inner content of quick tips card
+            const sections = `
+                <div class="grid grid-2">
+                    <div style="background:#f0fdf4; padding:1rem; border-radius:0.5rem;">
+                        <h4 style="color:#22c55e; margin-bottom:0.5rem;">✅ Do This</h4>
+                        <ul style="margin:0; padding-left:1rem; font-size:0.875rem;">
+                            ${doTips.map(x=>`<li>${x}</li>`).join('')}
+                        </ul>
+                    </div>
+                    <div style="background:#fef3c7; padding:1rem; border-radius:0.5rem;">
+                        <h4 style="color:#f59e0b; margin-bottom:0.5rem;">⚠️ Avoid This</h4>
+                        <ul style="margin:0; padding-left:1rem; font-size:0.875rem;">
+                            ${avoidTips.map(x=>`<li>${x}</li>`).join('')}
+                        </ul>
+                    </div>
+                </div>`;
+            // Keep existing title, replace the content section below title
+            const titleH3 = card.querySelector('h3');
+            card.innerHTML = '';
+            if (titleH3) card.appendChild(titleH3);
+            const contentDiv = document.createElement('div');
+            contentDiv.innerHTML = sections;
+            card.appendChild(contentDiv);
+            card.style.display = '';
+        }
+
+        // Build a company intel markdown summary from uploaded content
+        function extractCompanyIntelAgnostic(content) {
+            const company = appState.extractedData.company || '';
+            const role = appState.extractedData.role || '';
+            const tech = deriveTechStack(content);
+            const strengths = appState.extractedData.strengths || [];
+            const gaps = appState.extractedData.gaps || [];
+            const metrics = appState.extractedData.metrics || [];
+
+            const metricsMd = metrics.slice(0,8).map(m => `- ${m.label}: ${m.value}${m.growth?` (${m.growth})`:''}${m.context?` — ${m.context}`:''}`).join('\n') || '- Add a metrics CSV or include metrics in your docs';
+            const strengthsMd = strengths.slice(0,6).map(s=>`- ${s}`).join('\n') || '- Add strengths in your materials to populate';
+            const gapsMd = gaps.slice(0,5).map(g=>`- ${g}`).join('\n') || '- Add areas to improve to populate';
+
+            const md = `## Executive Brief\n\n**Company:** ${company || '—'}  \\
+**Role:** ${role || '—'}\n\n### Detected Tech Stack\n${tech.length ? tech.map(t=>`- ${t}`).join('\n') : '- Tech signals will appear when detected'}\n\n### Key Metrics\n${metricsMd}\n\n### Strengths\n${strengthsMd}\n\n### Potential Gaps\n${gapsMd}`;
+
+            appState.extractedData.companyIntel = md;
+            appState.extractedData.companyIntelSource = 'Uploaded Materials';
         }
 
         // Small helper to render a consistent AI badge in templates
@@ -393,9 +966,28 @@ GROUP BY previous_tier, current_tier;`;
         async function readFileContent(file) {
             return new Promise((resolve, reject) => {
                 const reader = new FileReader();
-                reader.onload = (e) => resolve(e.target.result);
                 reader.onerror = reject;
-                reader.readAsText(file);
+                const name = (file.name || '').toLowerCase();
+                if (name.endsWith('.docx')) {
+                    reader.onload = async (e) => {
+                        try {
+                            await ensureMammoth();
+                            const buf = e.target.result;
+                            if (window.mammoth && mammoth.extractRawText) {
+                                const { value } = await mammoth.extractRawText({ arrayBuffer: buf });
+                                resolve(value || '');
+                            } else {
+                                resolve('');
+                            }
+                        } catch (err) {
+                            resolve('');
+                        }
+                    };
+                    reader.readAsArrayBuffer(file);
+                } else {
+                    reader.onload = (e) => resolve(e.target.result);
+                    reader.readAsText(file);
+                }
             });
         }
 
@@ -457,10 +1049,57 @@ GROUP BY previous_tier, current_tier;`;
                             appState.extractedData.questions = csvQuestions;
                         }
                     }
+
+                    // Metrics CSV detection and parsing
+                    if (file.name.toLowerCase().includes('metric') && file.name.endsWith('.csv')) {
+                        await ensurePapaParse();
+                        const results = Papa.parse(content, {
+                            header: true,
+                            skipEmptyLines: true
+                        });
+                        const rows = Array.isArray(results.data) ? results.data : [];
+                        const parsedMetrics = [];
+                        const get = (row, keys) => {
+                            for (const k of keys) {
+                                if (row[k] && String(row[k]).trim()) return String(row[k]).trim();
+                            }
+                            return '';
+                        };
+                        const isValidValue = (v) => {
+                            if (!v) return false;
+                            const s = String(v).trim();
+                            if (s.length > 20) return false;
+                            return /^(\$?\d[\d,.]*)([MBK]\+?)?$/.test(s) || /^(\d+%|\d+\+?)$/.test(s);
+                        };
+                        rows.forEach(row => {
+                            const label = get(row, ['Category', 'Label', 'Metric', 'Name']);
+                            const value = get(row, ['Value', 'Amount', 'Figure']);
+                            const growth = get(row, ['Growth', 'Change']);
+                            const context = get(row, ['Context', 'Source', 'Notes']);
+                            if (label && isValidValue(value)) {
+                                parsedMetrics.push({ label, value, growth, context });
+                            }
+                        });
+                        if (parsedMetrics.length) {
+                            appState.extractedData.metrics = parsedMetrics.slice(0, 12);
+                        }
+                    }
                 }
                 
                 extractDataFromFiles();
+                updateUploadChecklist();
+                appState.dataLoaded = true;
+                setTabsEnabled(true);
+                detectSQLInFiles();
+                updateSqlAvailabilityUI();
+                collectSQLSnippetsFromFiles();
                 updateDashboard();
+                updateRequiresDataVisibility();
+                // Initialize countdown now that files are available
+                await initializeInterviewCountdown();
+                // Fill SQL editor if we found any snippets
+                populateSQLEditorFromSnippets();
+                updateSqlSnippetList();
 
                 updateDataStatus('Files processed successfully!', 'success');
                 showToast('Files processed successfully!', 'success');
@@ -468,8 +1107,7 @@ GROUP BY previous_tier, current_tier;`;
 
             } catch (error) {
                 console.error('Error processing files:', error);
-                updateDataStatus('Error processing files. Loading sample data instead.', 'warning');
-                await loadSampleData();
+                updateDataStatus('Error processing files. Please try again with supported files.', 'error');
             } finally {
                 if (processBtn) {
                     processBtn.textContent = 'Process Files';
@@ -514,19 +1152,13 @@ GROUP BY previous_tier, current_tier;`;
             // Extract strengths and gaps
             extractStrengthsAndGaps(combinedContent);
             
-            // Set defaults if not found
-            if (!appState.extractedData.company) {
-                appState.extractedData.company = 'Google';
-            }
-            if (!appState.extractedData.role) {
-                appState.extractedData.role = 'BI/Data Analyst';
-            }
+            // Do not set hardcoded defaults; remain agnostic until files provide context
             
             // Extract questions from Q&A documents
             extractQuestionsFromContent(combinedContent);
             
-            // Extract company intelligence
-            extractCompanyIntel(combinedContent);
+            // Extract company intelligence (agnostic)
+            extractCompanyIntelAgnostic(combinedContent);
             
             // Preserve existing questions if they were already loaded from CSV
             if (!appState.extractedData.questions || appState.extractedData.questions.length === 0) {
@@ -563,45 +1195,51 @@ GROUP BY previous_tier, current_tier;`;
                 • Stories: ${data.stories.length}
             `;
             document.getElementById('dataStatus').innerHTML = statusMessage;
+            updateRequiresDataVisibility();
+            // Build dynamic sections
+            try { updateInterviewContext(); } catch (e) {}
+            try { updateSQLContextCard(); } catch (e) {}
+            try { updateSchemaCard(); } catch (e) {}
+            try { updateScenariosCard(); } catch (e) {}
+            try { updateTechBadges(); } catch (e) {}
+            try { updateQuickTipsFromData(); } catch (e) {}
         }
 
-        // Helper function for default metrics
-        function getDefaultMetrics() {
-            return [
-                { label: 'Play Points Members', value: '220M+', growth: 'Global', context: '' },
-                { label: 'Your Scale', value: '500M+', growth: 'Records', context: 'Home Depot' },
-                { label: 'Revenue Impact', value: '$3.2M', growth: '+12%', context: 'Retention' },
-                { label: 'Google Play Revenue', value: '$11.63B', growth: 'Q4 2024', context: '' },
-                { label: 'Efficiency Gain', value: '80%', growth: 'Automation', context: '' },
-                { label: 'Query Speed', value: '95%', growth: 'Faster', context: '10min→30sec' },
-                { label: 'Dashboard Adoption', value: '30%', growth: 'Increase', context: '200+ users' },
-                { label: 'Daily Processing', value: '100M+', growth: 'Records', context: 'Trulieve' }
-            ];
-        }
+        // No default metrics helper; data comes from uploaded files only.
 
         function updateCommandCenter() {
             const data = appState.extractedData;
             
-            // Update metrics with proper formatting
+            // Update metrics with uploaded data only
             const metricsContainer = document.getElementById('keyMetrics');
             if (metricsContainer) {
-                // Always use default metrics for consistent display
-                const metricsToShow = getDefaultMetrics();
-                
-                console.log('Updating metrics:', metricsToShow);
-                
-                const colors = ['#4f46e5', '#22c55e', '#f59e0b', '#8b5cf6', '#0ea5e9', '#ec4899', '#14b8a6'];
-                metricsContainer.innerHTML = metricsToShow.map((metric, index) => {
-                    const bgColor = `linear-gradient(135deg, ${colors[index % colors.length]} 0%, ${colors[(index + 1) % colors.length]} 100%)`;
-                    return `
-                        <div class="metric-tile" style="background: ${bgColor}; padding: 1.5rem; border-radius: 0.75rem; color: white; transition: all 0.3s ease; cursor: pointer; min-height: 140px; display: flex; flex-direction: column; justify-content: center; position: relative; overflow: hidden;">
-                            <div style="font-size: 2rem; font-weight: 700; margin-bottom: 0.5rem; z-index: 2;">${metric.value}</div>
-                            ${metric.growth ? `<div style="font-size: 0.875rem; opacity: 0.9; margin-bottom: 0.5rem; z-index: 2;">${metric.growth}</div>` : ''}
-                            <div style="font-size: 0.875rem; font-weight: 600; margin-bottom: 0.25rem; z-index: 2;">${metric.label}</div>
-                            ${metric.context ? `<div style="font-size: 0.75rem; opacity: 0.8; z-index: 2;">${metric.context}</div>` : ''}
-                        </div>
-                    `;
-                }).join('');
+                const isValidValue = (v) => {
+                    if (!v) return false;
+                    const s = String(v).trim();
+                    if (s.length > 20) return false;
+                    return /^(\$?\d[\d,.]*)([MBK]\+?)?$/.test(s) || /^(\d+%|\d+\+?)$/.test(s);
+                };
+                const metricsToShow = (Array.isArray(data.metrics) ? data.metrics : []).filter(m => m && m.label && isValidValue(m.value));
+                if (!metricsToShow.length) {
+                    metricsContainer.innerHTML = '<p style="color:#64748b;">No metrics available. Upload files to populate metrics.</p>';
+                } else {
+                    const colors = ['#4f46e5', '#22c55e', '#f59e0b', '#8b5cf6', '#0ea5e9', '#ec4899', '#14b8a6'];
+                    metricsContainer.innerHTML = metricsToShow.map((metric, index) => {
+                        const bgColor = `linear-gradient(135deg, ${colors[index % colors.length]} 0%, ${colors[(index + 1) % colors.length]} 100%)`;
+                        const label = String(metric.label || '').trim().slice(0, 60);
+                        const value = String(metric.value || '').trim();
+                        const growth = metric.growth ? String(metric.growth).trim().slice(0, 40) : '';
+                        const context = metric.context ? String(metric.context).trim().slice(0, 60) : '';
+                        return `
+                            <div class="metric-tile" style="background: ${bgColor}; padding: 1.5rem; border-radius: 0.75rem; color: white; transition: all 0.3s ease; cursor: pointer; min-height: 140px; display: flex; flex-direction: column; justify-content: center; position: relative; overflow: hidden;">
+                                <div style="font-size: 2rem; font-weight: 700; margin-bottom: 0.5rem; z-index: 2;">${value}</div>
+                                ${growth ? `<div style="font-size: 0.875rem; opacity: 0.9; margin-bottom: 0.5rem; z-index: 2;">${growth}</div>` : ''}
+                                <div style="font-size: 0.875rem; font-weight: 600; margin-bottom: 0.25rem; z-index: 2;">${label}</div>
+                                ${context ? `<div style="font-size: 0.75rem; opacity: 0.8; z-index: 2;">${context}</div>` : ''}
+                            </div>
+                        `;
+                    }).join('');
+                }
             }
             
             // Update strengths
@@ -624,32 +1262,14 @@ GROUP BY previous_tier, current_tier;`;
         function updateCompanyIntel() {
             const data = appState.extractedData;
 
-            // Update Company Metrics Tiles - Strategic Context (non-overlapping with Command Center)
+            // Update Company Metrics Tiles only when data present
             const metricsContainer = document.getElementById('companyMetrics');
             if (metricsContainer) {
-                const companyMetrics = [
-                    { label: 'Market Dominance', value: '49%', growth: 'US Revenue', context: 'vs Apple Store' },
-                    { label: 'Global Downloads', value: '100B+', growth: 'Annual', context: 'Play Store' },
-                    { label: 'AI Investment', value: '$75B', growth: '2025 CapEx', context: 'Infrastructure' },
-                    { label: 'Regulatory Risk', value: '$205M', growth: 'Epic Settlement', context: 'Pending' },
-                    { label: 'Diamond Tier Launch', value: '2024', growth: 'New Program', context: 'Play Points' },
-                    { label: 'Gaming Revenue', value: '$31.3B', growth: '2022', context: 'vs Apple $50B' },
-                    { label: 'SQL Job Demand', value: '52.9%', growth: 'Of Postings', context: '2024 Market' },
-                    { label: 'Data Growth', value: '23%', growth: 'Through 2032', context: 'Analytics Jobs' }
-                ];
-                
-                const colors = ['#4f46e5', '#22c55e', '#f59e0b', '#8b5cf6', '#0ea5e9', '#ec4899', '#14b8a6', '#f97316'];
-                metricsContainer.innerHTML = companyMetrics.map((metric, index) => {
-                    const bgColor = `linear-gradient(135deg, ${colors[index % colors.length]} 0%, ${colors[(index + 1) % colors.length]} 100%)`;
-                    return `
-                        <div class="metric-tile" style="background: ${bgColor};">
-                            <div style="font-size: 2rem; font-weight: 700; margin-bottom: 0.5rem; z-index: 2; position: relative;">${metric.value}</div>
-                            ${metric.growth ? `<div style="font-size: 0.875rem; opacity: 0.9; margin-bottom: 0.5rem; z-index: 2; position: relative;">${metric.growth}</div>` : ''}
-                            <div style="font-size: 0.875rem; font-weight: 600; margin-bottom: 0.25rem; z-index: 2; position: relative;">${metric.label}</div>
-                            ${metric.context ? `<div style="font-size: 0.75rem; opacity: 0.8; z-index: 2; position: relative;">${metric.context}</div>` : ''}
-                        </div>
-                    `;
-                }).join('');
+                if (!data.companyIntel) {
+                    metricsContainer.innerHTML = '<p style="color:#64748b;">No company intelligence yet. Upload files to populate.</p>';
+                } else {
+                    metricsContainer.innerHTML = '';
+                }
             }
 
             const briefingDiv = document.getElementById('companyBriefing');
@@ -1089,13 +1709,18 @@ GROUP BY previous_tier, current_tier;`;
             const questions = appState.extractedData.questions;
             const searchTerm = document.getElementById('questionSearch')?.value.toLowerCase() || '';
             const category = document.getElementById('questionCategory')?.value || '';
+            const interviewer = document.getElementById('interviewerFilter')?.value.toLowerCase() || '';
             
             const filtered = questions.filter(q => {
                 const matchesSearch = !searchTerm || 
                     q.question.toLowerCase().includes(searchTerm) || 
                     (q.answer && q.answer.toLowerCase().includes(searchTerm));
-                const matchesCategory = !category || q.category === category;
-                return matchesSearch && matchesCategory;
+                const matchesCategory = !category ||
+                    (q.category && q.category.toLowerCase().includes(category.toLowerCase())) ||
+                    (q.categoryDisplay && q.categoryDisplay.toLowerCase().includes(category.toLowerCase()));
+                const matchesInterviewer = !interviewer ||
+                    (q.likelyAsker && q.likelyAsker.toLowerCase().includes(interviewer));
+                return matchesSearch && matchesCategory && matchesInterviewer;
             });
             
             container.innerHTML = filtered.map(q => {
@@ -1127,8 +1752,9 @@ GROUP BY previous_tier, current_tier;`;
                             <div style="flex: 1;">
                                 <div style="margin-bottom: 0.75rem; display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;">
                                     <span style="display: inline-block; padding: 0.25rem 0.75rem; background: ${getCategoryColor(q.category)}; color: white; border-radius: 1rem; font-size: 0.75rem; font-weight: 600;">
-                                        ${q.category.toUpperCase()}
+                                        ${q.category?.toUpperCase()}
                                     </span>
+                                    ${q.categoryDisplay ? `<span style="display: inline-block; padding: 0.25rem 0.75rem; background: ${getCategoryColor(q.categoryDisplay)}; color: white; border-radius: 1rem; font-size: 0.75rem; font-weight: 600;">${q.categoryDisplay.toUpperCase()}</span>` : ''}
                                     ${q.difficulty ? `<span style="display: inline-block; padding: 0.25rem 0.75rem; background: #8b5cf6; color: white; border-radius: 1rem; font-size: 0.75rem; font-weight: 600;">${q.difficulty}</span>` : ''}
                                     ${q.confidence ? `<span style="display: inline-block; padding: 0.25rem 0.75rem; background: ${confidenceColor}; color: white; border-radius: 1rem; font-size: 0.75rem; font-weight: 600;">${confidenceText} ${q.confidence}%</span>` : ''}
                                     ${q.likelyAsker ? `<span style="display: inline-block; padding: 0.25rem 0.5rem; background: #0ea5e9; color: white; border-radius: 9999px; font-size: 0.7rem;">👤 ${q.likelyAsker}</span>` : ''}
@@ -1231,7 +1857,7 @@ GROUP BY previous_tier, current_tier;`;
             if (!container) return;
             
             if (appState.extractedData.stories.length === 0) {
-                container.innerHTML = '<p style="color: #64748b;">No stories loaded yet. Upload files or load sample data.</p>';
+                container.innerHTML = '<p style="color: #64748b;">No stories loaded yet. Upload files to populate.</p>';
                 return;
             }
             
@@ -1492,6 +2118,123 @@ GROUP BY previous_tier, current_tier;`;
             } catch(e) { 
                 console.error('❌ Error loading Q&A markdown:', e);
                 return []; 
+            }
+        }
+
+        // Rich parser: load questions from Markdown with HTML-formatted answers
+        async function loadQuestionsFromMarkdownRich() {
+            try {
+                console.log('🔍 Loading questions (rich) from Google Q&A Bank.md...');
+                const res = await fetch('input_files/Google Q&A Bank.md');
+                if (!res.ok) { return []; }
+
+                const text = await res.text();
+                const lines = text.split(/\r?\n/);
+
+                function normalizeCategory(heading) {
+                    const h = (heading || '').toLowerCase();
+                    let category = 'general';
+                    let display = '';
+                    if (h.includes('technical')) category = 'technical';
+                    else if (h.includes('business')) category = 'situational';
+                    else if (h.includes('cultural')) category = 'behavioral';
+                    if (h.includes('role-specific')) display = 'role-specific';
+                    return { category, display };
+                }
+                function mdListToHtml(block) {
+                    if (!block) return '';
+                    const rows = block.trim().split(/\r?\n/).filter(r => r.trim() !== '');
+                    const isList = rows.every(r => r.trim().startsWith('- ') || r.trim().startsWith('• '));
+                    if (isList) {
+                        return '<ul style="margin:0.25rem 0 0 1rem;">' + rows.map(r => `<li>${r.replace(/^[-•]\s*/, '')}</li>`).join('') + '</ul>';
+                    }
+                    return convertMarkdownToHtml(block.trim());
+                }
+
+                let cat = { category: 'general', display: '' };
+                let current = null;
+                let section = '';
+                let buffers = {};
+
+                function beginQuestion(title) {
+                    if (current) finishQuestion();
+                    current = {
+                        question: title.replace(/^["\“\”]+|["\“\”]+$/g, ''),
+                        answer: '',
+                        category: cat.category,
+                        categoryDisplay: cat.display,
+                        likelyAsker: '',
+                        source: 'Q&A BANK'
+                    };
+                    buffers = {};
+                    section = '';
+                }
+                function finishQuestion() {
+                    const order = ['30-Second Core', '60-Second Standard (with STAR)', '90-Second Deep Dive', 'Your Approach', 'Your Response', 'Expected Impact'];
+                    let html = '';
+                    order.forEach(name => {
+                        const key = name.toLowerCase();
+                        const content = buffers[key];
+                        if (content && content.length) {
+                            html += `<div style="margin-bottom:0.5rem;"><strong>${name}:</strong> ${mdListToHtml(content.join('\n'))}</div>`;
+                        }
+                    });
+                    current.answer = html || 'Review prep notes and Q&A content';
+                    results.push(current);
+                    current = null;
+                    section = '';
+                    buffers = {};
+                }
+                function startSection(line) {
+                    const titles = ['30-Second Core', '60-Second Standard (with STAR)', '90-Second Deep Dive', 'Your Approach', 'Your Response', 'Expected Impact'];
+                    for (const t of titles) {
+                        const re = new RegExp(`^\\*\\*${t}\\*\\*:?`);
+                        if (re.test(line)) {
+                            section = t.toLowerCase();
+                            const after = line.replace(re, '').trim();
+                            buffers[section] = buffers[section] || [];
+                            if (after) buffers[section].push(after);
+                            return true;
+                        }
+                    }
+                    return false;
+                }
+
+                const results = [];
+                for (let i = 0; i < lines.length; i++) {
+                    const raw = lines[i];
+                    const line = raw.trim();
+                    if (/^## .*CATEGORY \d+:/i.test(line)) {
+                        const heading = line.replace(/^## .*CATEGORY \d+:\s*/i, '');
+                        cat = normalizeCategory(heading);
+                        continue;
+                    }
+                    if (/^### Q\d+:/i.test(line)) {
+                        const title = line.replace(/^### Q\d+:\s*/i, '');
+                        beginQuestion(title);
+                        continue;
+                    }
+                    if (/^\*Likely Asker:/i.test(line)) {
+                        if (current) current.likelyAsker = line.replace(/^\*Likely Asker:\s*/i, '').replace(/\*$/, '').trim();
+                        continue;
+                    }
+                    if (startSection(line)) continue;
+                    if (/^### Q\d+:/i.test(line) || /^##\s+/i.test(line)) continue;
+
+                    if (current) {
+                        if (line.startsWith('```')) continue; // ignore code fences
+                        if (!section) { section = 'your response'; buffers[section] = buffers[section] || []; }
+                        // Skip heavy SQL lines for prep display
+                        if (!/^SELECT|^FROM|^CREATE|^WITH\s/i.test(line)) buffers[section].push(line);
+                    }
+                }
+                if (current) finishQuestion();
+
+                console.log(`✅ Extracted ${results.length} questions (rich)`);
+                return results;
+            } catch (e) {
+                console.error('❌ Error loading rich Q&A:', e);
+                return [];
             }
         }
 
@@ -2056,37 +2799,8 @@ GROUP BY previous_tier, current_tier;`;
         function extractKeyMetrics(content) {
             const metrics = [];
             const addedMetrics = new Set();
-            
-            // Parse CSV metrics if present
-            if (content.includes('Metric/Data Point') || content.includes('Category,Value')) {
-                const lines = content.split('\n');
-                lines.forEach(line => {
-                    if (line.includes(',') && !line.startsWith('Metric') && !line.startsWith('Category')) {
-                        const parts = line.split(',');
-                        if (parts.length >= 2) {
-                            const label = parts[0].trim();
-                            const value = parts[1].trim();
-                            const growth = parts[2] ? parts[2].trim() : '';
-                            
-                            // Filter for key metrics
-                            if (label.includes('Google Play') || label.includes('Play Points') || 
-                                label.includes('Revenue') || label.includes('Users') || 
-                                label.includes('SQL') || label.includes('BigQuery')) {
-                                const key = label + value;
-                                if (!addedMetrics.has(key)) {
-                                    metrics.push({
-                                        label: label,
-                                        value: value,
-                                        growth: growth,
-                                        context: parts[3] ? parts[3].trim() : ''
-                                    });
-                                    addedMetrics.add(key);
-                                }
-                            }
-                        }
-                    }
-                });
-            }
+            // NOTE: Do NOT attempt to parse CSV-like lines from arbitrary text.
+            // Metrics from CSVs are handled during file processing only.
             
             // Extract from text content
             const textMetrics = [
@@ -2132,7 +2846,18 @@ GROUP BY previous_tier, current_tier;`;
             
             // Limit to most important metrics
             if (metrics.length > 0) {
-                appState.extractedData.metrics = metrics.slice(0, 12);
+                if (!Array.isArray(appState.extractedData.metrics) || appState.extractedData.metrics.length === 0) {
+                    appState.extractedData.metrics = metrics.slice(0, 12);
+                } else {
+                    // Merge without duplicates on label+value
+                    const existing = new Set(appState.extractedData.metrics.map(m => `${m.label}|${m.value}`));
+                    const merged = [...appState.extractedData.metrics];
+                    metrics.forEach(m => {
+                        const key = `${m.label}|${m.value}`;
+                        if (!existing.has(key)) merged.push(m);
+                    });
+                    appState.extractedData.metrics = merged.slice(0, 12);
+                }
             }
         }
         
@@ -2750,7 +3475,8 @@ GROUP BY previous_tier, current_tier;`;
             let strategicQuestions = {};
             try {
                 console.log('📋 Loading questions from Q&A Bank...');
-                const questionsFromMD = await loadQuestionsFromMarkdown();
+                // Prefer rich HTML-formatted parser
+                const questionsFromMD = await loadQuestionsFromMarkdownRich();
                 if (questionsFromMD && questionsFromMD.length > 0) {
                     questions = questionsFromMD;
                     console.log(`✅ Loaded ${questions.length} questions from Q&A Bank`);
@@ -2822,11 +3548,11 @@ GROUP BY previous_tier, current_tier;`;
                 metrics = await loadMetricsForCommandCenter();
             } catch (error) {
                 console.log('Could not load metrics:', error);
-                metrics = getDefaultMetrics(); // Use default metrics as fallback
+                metrics = [];
             }
 
             // Infer company/role hints from available files/metrics
-            let inferred = { company: 'Google Play', role: 'BI Data Analyst' };
+            let inferred = { company: '', role: '' };
             try {
                 inferred = await inferCompanyAndRoleFromFiles(intel);
             } catch (error) {
@@ -2947,108 +3673,95 @@ GROUP BY previous_tier, current_tier;`;
         // AI Generation Functions (Mock implementations)
         async function generatePowerIntro() {
             const introDiv = document.getElementById('powerIntro');
+            const company = appState.extractedData.company || '';
+            const role = appState.extractedData.role || '';
+            const metrics = appState.extractedData.metrics || [];
+            const strengths = appState.extractedData.strengths || [];
+            const tech = deriveTechStack(getCombinedContent());
+            const m1 = metrics[0] ? `${metrics[0].value} ${metrics[0].label}` : '';
+            const m2 = metrics[1] ? `${metrics[1].value} ${metrics[1].label}` : '';
+            const s1 = strengths[0] || '';
+            const s2 = strengths[1] || '';
+            const t1 = tech[0] || '';
+            const t2 = tech[1] || '';
+
+            const hookRole = (company || role) ? `${company ? company + ' ' : ''}${role || 'role'}` : 'this role';
+            const proofBullets = [m1, m2, s1, s2].filter(Boolean).slice(0,3).map(x=>`• ${x}`).join('<br>');
+            const stackLine = [t1,t2].filter(Boolean).join(', ');
+
             introDiv.innerHTML = `
                 <div style="padding: 2rem; background: linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%); border-radius: 0.75rem; border-left: 4px solid #0ea5e9;">
                     <div style="display: flex; align-items: center; margin-bottom: 1rem;">
                         <h3 style="color: #1e293b; margin: 0; margin-right: 0.5rem;">🎯 Strategic Opening Hook</h3>
                         ${aiBadge()}
                     </div>
-                    
                     <div style="background: white; padding: 1.5rem; border-radius: 0.5rem; margin-bottom: 1rem;">
                         <h4 style="color: #0ea5e9; margin-bottom: 1rem;">💼 Your 90-Second Power Hook</h4>
-                        <p style="line-height: 1.6; font-size: 1rem;"><strong>"Thank you for this opportunity to discuss the Google Play BI role.</strong></p>
-                        <p style="line-height: 1.6; margin-top: 1rem;"><strong>I bring 8+ years of advanced SQL expertise</strong> specifically optimized for billion-row datasets, with proven success processing <strong>500M+ SKU records at Home Depot</strong> and <strong>100M+ daily transactions at Trulieve.</strong></p>
-                        <p style="line-height: 1.6; margin-top: 1rem;"><strong>My impact is measurable:</strong> I've driven <strong>12% customer retention improvements worth $3.2M</strong>, achieved <strong>95% query optimization</strong> reducing processing from 10 minutes to 30 seconds, and increased <strong>dashboard adoption by 30%</strong> across 200+ stakeholders.</p>
-                        <p style="line-height: 1.6; margin-top: 1rem;"><strong>What excites me about this role</strong> is applying this scalable expertise to <strong>Google Play's 220M+ Play Points members</strong> and <strong>$11.63B quarterly ecosystem,</strong> particularly addressing the Gold-to-Platinum progression challenges and supporting the upcoming AI/ML integration expansion."</p>
-                        <p style="line-height: 1.6; margin-top: 1rem; font-style: italic; color: #64748b;"><strong>Duration: 85-90 seconds | Key metrics embedded | Direct role relevance</strong></p>
+                        <p style="line-height: 1.6; font-size: 1rem;"><strong>"Thank you for the opportunity to discuss ${hookRole}.</strong></p>
+                        <p style="line-height: 1.6; margin-top: 1rem;">I focus on measurable outcomes with a strong foundation in ${stackLine || 'modern analytics'} and rigorous SQL. Recently, I've delivered:</p>
+                        <p style="line-height: 1.6; margin-top: 0.5rem;">${proofBullets || '• Quantified business impact<br>• Performance and cost improvements<br>• Clear communication with stakeholders'}</p>
+                        <p style="line-height: 1.6; margin-top: 1rem;">I'm excited to apply this approach to your team's priorities—partnering cross-functionally, validating assumptions with data, and moving quickly while keeping quality high."</p>
+                        <p style="line-height: 1.6; margin-top: 1rem; font-style: italic; color: #64748b;"><strong>Duration: ~90 seconds | Metrics-driven | Role-focused</strong></p>
                     </div>
-                    
                     <div style="background: linear-gradient(135deg, #22c55e 0%, #16a34a 100%); color: white; padding: 1rem; border-radius: 0.5rem;">
                         <h4 style="color: white; margin-bottom: 0.75rem;">🚀 Opening Impact Framework</h4>
                         <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
                             <div>
-                                <strong>Hook (15s):</strong> Role-specific expertise + scale<br>
-                                <strong>Proof (45s):</strong> 3 quantified achievements<br>
-                                <strong>Bridge (25s):</strong> Google Play relevance + enthusiasm
+                                <strong>Hook (15s):</strong> Context + focus<br>
+                                <strong>Proof (45s):</strong> 2–3 quantified outcomes<br>
+                                <strong>Bridge (25s):</strong> Align to team priorities
                             </div>
                             <div>
-                                <strong>Key Numbers:</strong> 500M+, $3.2M, 95%, 220M+<br>
-                                <strong>Differentiators:</strong> SQL mastery, C-level experience<br>
-                                <strong>Context:</strong> Play Points challenges, AI/ML future
+                                <strong>Key Numbers:</strong> ${m1 || '—'} ${m2 ? ' | ' + m2 : ''}<br>
+                                <strong>Tech:</strong> ${stackLine || '—'}<br>
+                                <strong>Style:</strong> Clear, measurable, collaborative
                             </div>
                         </div>
                     </div>
-                </div>
-            `;
-            showToast('Comprehensive power hook generated!', 'success');
+                </div>`;
+            showToast('Power intro generated from your materials!', 'success');
         }
 
         async function generateTalkingPoints() {
             const pointsDiv = document.getElementById('talkingPoints');
+            const strengths = appState.extractedData.strengths || [];
+            const gaps = appState.extractedData.gaps || [];
+            const metrics = appState.extractedData.metrics || [];
+            const tech = deriveTechStack(getCombinedContent());
+            const techList = tech.slice(0,6).map(t=>`<li>${t}</li>`).join('') || '<li>Add more materials to detect tech stack</li>';
+            const strengthList = strengths.slice(0,6).map(s=>`<li>${s}</li>`).join('') || '<li>Add strengths in your materials</li>';
+            const metricList = metrics.slice(0,4).map(m=>`<li><strong>${m.value}</strong> — ${m.label}</li>`).join('') || '<li>Provide a metrics CSV or include metrics in your docs</li>';
+            const diffList = [
+                'Outcome-first storytelling with metrics',
+                'Cross-functional collaboration with clear trade-offs',
+                'Data rigor with practical cost/perf validation'
+            ].map(d=>`<div>• ${d}</div>`).join('');
             pointsDiv.innerHTML = `
                 <div style="padding: 2rem; background: linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%); border-radius: 0.75rem; border-left: 4px solid #22c55e;">
                     <div style="display: flex; align-items: center; margin-bottom: 1rem;">
                         <h3 style="color: #1e293b; margin: 0; margin-right: 0.5rem;">🎯 Strategic Talking Points</h3>
                         ${aiBadge()}
                     </div>
-                    
                     <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem;">
-                        <!-- Technical Excellence Column -->
                         <div style="background: white; padding: 1.5rem; border-radius: 0.5rem;">
-                            <h4 style="color: #22c55e; margin-bottom: 1rem; display: flex; align-items: center;">
-                                ⚙️ Technical Excellence
-                            </h4>
-                            <ul style="line-height: 1.8; margin: 0; padding-left: 1rem;">
-                                <li><strong>Scale Mastery:</strong> 500M+ SKU records, 100M+ daily transactions processed</li>
-                                <li><strong>Query Optimization:</strong> 95% performance improvement (10min→30sec)</li>
-                                <li><strong>BigQuery Readiness:</strong> Snowflake expertise transfers directly to Google's platform</li>
-                                <li><strong>Pipeline Architecture:</strong> Built automated ETL reducing manual effort by 80%</li>
-                                <li><strong>Cloud Native:</strong> AWS, Azure, GCP experience with modern data stacks</li>
-                            </ul>
+                            <h4 style="color: #22c55e; margin-bottom: 1rem;">⚙️ Technical Relevance</h4>
+                            <ul style="line-height: 1.8; margin: 0; padding-left: 1rem;">${techList}</ul>
                         </div>
-                        
-                        <!-- Business Impact Column -->
                         <div style="background: white; padding: 1.5rem; border-radius: 0.5rem;">
-                            <h4 style="color: #3b82f6; margin-bottom: 1rem; display: flex; align-items: center;">
-                                📊 Business Impact
-                            </h4>
-                            <ul style="line-height: 1.8; margin: 0; padding-left: 1rem;">
-                                <li><strong>Revenue Generation:</strong> $3.2M impact through 12% retention improvement</li>
-                                <li><strong>Cost Savings:</strong> $2M annual savings through automation</li>
-                                <li><strong>Stakeholder Enablement:</strong> 30% dashboard adoption across 200+ users</li>
-                                <li><strong>Executive Communication:</strong> C-level presentation experience</li>
-                                <li><strong>Cross-Functional Leadership:</strong> Lean Six Sigma process optimization</li>
-                            </ul>
+                            <h4 style="color: #3b82f6; margin-bottom: 1rem;">📊 Proof Points</h4>
+                            <ul style="line-height: 1.8; margin: 0; padding-left: 1rem;">${metricList}</ul>
                         </div>
                     </div>
-                    
                     <div style="background: white; padding: 1.5rem; border-radius: 0.5rem; margin-top: 1.5rem;">
-                        <h4 style="color: #8b5cf6; margin-bottom: 1rem;">🚀 Google Play Specific Relevance</h4>
-                        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 1rem;">
-                            <div style="background: #f8fafc; padding: 1rem; border-radius: 0.25rem; border-left: 3px solid #8b5cf6;">
-                                <strong>Play Points Optimization:</strong> My customer segmentation expertise directly applies to analyzing loyalty tier progression patterns across 220M+ members
-                            </div>
-                            <div style="background: #f8fafc; padding: 1rem; border-radius: 0.25rem; border-left: 3px solid #0ea5e9;">
-                                <strong>AI/ML Readiness:</strong> Experience with Python ML pipelines positions me well for the upcoming 6-12 month AI integration expansion
-                            </div>
-                            <div style="background: #f8fafc; padding: 1rem; border-radius: 0.25rem; border-left: 3px solid #f59e0b;">
-                                <strong>Regulatory Awareness:</strong> Understanding of data governance requirements relevant to Epic Games settlement and EU DMA compliance
-                            </div>
-                        </div>
+                        <h4 style="color: #8b5cf6; margin-bottom: 1rem;">✅ Strengths To Emphasize</h4>
+                        <ul style="line-height: 1.8; margin: 0; padding-left: 1rem;">${strengthList}</ul>
                     </div>
-                    
                     <div style="background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%); color: white; padding: 1rem; border-radius: 0.5rem; margin-top: 1.5rem;">
-                        <h4 style="color: white; margin-bottom: 0.75rem;">💡 Key Differentiators to Emphasize</h4>
-                        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 1rem;">
-                            <div><strong>• Immediate Impact:</strong> 8+ years SQL means zero ramp-up time</div>
-                            <div><strong>• Proven Scale:</strong> Already operating at Google-level data volumes</div>
-                            <div><strong>• Stakeholder Savvy:</strong> C-level presentation skills rare in contractor pool</div>
-                            <div><strong>• Process Excellence:</strong> Lean Six Sigma aligns with "Year of Efficiency"</div>
-                        </div>
+                        <h4 style="color: white; margin-bottom: 0.75rem;">💡 Differentiators</h4>
+                        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 1rem;">${diffList}</div>
                     </div>
-                </div>
-            `;
-            showToast('Comprehensive talking points generated!', 'success');
+                </div>`;
+            showToast('Talking points generated from your materials!', 'success');
         }
 
         async function generateGapStrategies() {
@@ -5314,40 +6027,124 @@ ${highlights.join('\n')}
         }
 
         // Interview Countdown Function
-        function initializeInterviewCountdown() {
-            // Interview date (ISO string for reliable parsing across browsers/timezones)
-            const interviewDate = new Date('2025-09-02T12:30:00-04:00');
-            
+        async function initializeInterviewCountdown() {
+            // Helper: parse "**Interview Date:** ..." from JD file and convert to Date with TZ
+            function tzAbbrevToOffset(abbrev) {
+                const map = {
+                    EDT: '-04:00', EST: '-05:00',
+                    PDT: '-07:00', PST: '-08:00',
+                    CDT: '-05:00', CST: '-06:00',
+                    MDT: '-06:00', MST: '-07:00'
+                };
+                return map[abbrev] || null;
+            }
+
+            function monthToNum(name) {
+                const m = {
+                    january: 1, february: 2, march: 3, april: 4, may: 5, june: 6,
+                    july: 7, august: 8, september: 9, october: 10, november: 11, december: 12
+                };
+                return m[name.toLowerCase()] || null;
+            }
+
+            function pad(n) { return String(n).padStart(2, '0'); }
+
+            function parseJDInterviewDate(raw) {
+                // Expect formats like: "Tuesday, September 4, 2025 | 5:00 PM EDT"
+                if (!raw) return null;
+                try {
+                    const cleaned = raw.replace(/^\s*[A-Za-z]+,\s*/, '').trim();
+                    const [datePart, timePartRaw] = cleaned.split('|').map(s => s.trim());
+                    if (!datePart || !timePartRaw) return null;
+
+                    // datePart: "September 4, 2025"
+                    const dp = datePart.match(/([A-Za-z]+)\s+(\d{1,2}),\s*(\d{4})/);
+                    if (!dp) return null;
+                    const month = monthToNum(dp[1]);
+                    const day = parseInt(dp[2], 10);
+                    const year = parseInt(dp[3], 10);
+                    if (!month || !day || !year) return null;
+
+                    // timePartRaw: "5:00 PM EDT" or "12:30 PM EDT"
+                    const tp = timePartRaw.match(/(\d{1,2}):(\d{2})\s*(AM|PM)\s*([A-Z]{2,4})?/i);
+                    if (!tp) return null;
+                    let hour = parseInt(tp[1], 10);
+                    const minute = parseInt(tp[2], 10);
+                    const ampm = tp[3].toUpperCase();
+                    const tzAbbrev = (tp[4] || '').toUpperCase();
+
+                    if (ampm === 'PM' && hour !== 12) hour += 12;
+                    if (ampm === 'AM' && hour === 12) hour = 0;
+
+                    const offset = tzAbbrevToOffset(tzAbbrev) || '-04:00'; // default to EDT if unspecified
+                    const iso = `${year}-${pad(month)}-${pad(day)}T${pad(hour)}:${pad(minute)}:00${offset}`;
+                    return { iso, display: raw.trim() };
+                } catch (e) {
+                    return null;
+                }
+            }
+
+            // Find JD file among uploaded files and parse date
+            const jdEntry = Object.entries(appState.fileContents).find(([name]) => /jd/i.test(name));
+            const countdownEl = document.getElementById('interviewCountdown');
+            const dateTextEl = document.getElementById('interviewDateText');
+            const labelEl = document.getElementById('interviewLabel');
+
+            if (!jdEntry) {
+                if (countdownEl) countdownEl.style.display = 'none';
+                return;
+            }
+
+            const jdText = jdEntry[1] || '';
+            const match = jdText.match(/(?:\*\*)?Interview Date:(?:\*\*)?\s*([^\n]+)/i);
+            if (!match || !match[1]) {
+                if (countdownEl) countdownEl.style.display = 'none';
+                return;
+            }
+
+            const parsed = parseJDInterviewDate(match[1]);
+            if (!parsed) {
+                if (countdownEl) countdownEl.style.display = 'none';
+                return;
+            }
+
+            const interviewDate = new Date(parsed.iso);
+            if (dateTextEl) dateTextEl.textContent = parsed.display;
+            if (labelEl) {
+                const c = appState?.extractedData?.company || '';
+                const r = appState?.extractedData?.role || '';
+                labelEl.textContent = (c || r) ? `${c}${c && r ? ' ' : ''}${r} Interview` : 'Interview Countdown';
+            }
+            if (countdownEl) countdownEl.style.display = '';
+
             function updateCountdown() {
                 const now = new Date();
                 const timeDiff = interviewDate - now;
-                
                 if (timeDiff <= 0) {
-                    document.getElementById('countdownDisplay').textContent = 'Interview Time!';
+                    const el = document.getElementById('countdownDisplay');
+                    if (el) el.textContent = 'Interview Time!';
                     return;
                 }
-                
                 const days = Math.floor(timeDiff / (1000 * 60 * 60 * 24));
                 const hours = Math.floor((timeDiff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
                 const minutes = Math.floor((timeDiff % (1000 * 60 * 60)) / (1000 * 60));
                 const seconds = Math.floor((timeDiff % (1000 * 60)) / 1000);
-                
                 let countdownText = '';
-                if (days > 0) {
-                    countdownText = `${days}d ${hours}h ${minutes}m`;
-                } else if (hours > 0) {
-                    countdownText = `${hours}h ${minutes}m ${seconds}s`;
-                } else {
-                    countdownText = `${minutes}m ${seconds}s`;
-                }
-                
-                document.getElementById('countdownDisplay').textContent = countdownText;
+                if (days > 0) countdownText = `${days}d ${hours}h ${minutes}m`;
+                else if (hours > 0) countdownText = `${hours}h ${minutes}m ${seconds}s`;
+                else countdownText = `${minutes}m ${seconds}s`;
+                const el = document.getElementById('countdownDisplay');
+                if (el) el.textContent = countdownText;
             }
-            
+
+            // Clear any previous countdown interval to avoid duplicates
+            if (window.__interviewCountdownInterval) {
+                clearInterval(window.__interviewCountdownInterval);
+            }
+
             // Update immediately and then every second
             updateCountdown();
             const countdownInterval = setInterval(() => {
-                // Stop updating if the countdown element is not visible or if interview has passed
                 const element = document.getElementById('countdownDisplay');
                 if (!element || interviewDate <= new Date()) {
                     clearInterval(countdownInterval);
@@ -5355,6 +6152,7 @@ ${highlights.join('\n')}
                 }
                 updateCountdown();
             }, 1000);
+            window.__interviewCountdownInterval = countdownInterval;
         }
         
         // Mobile Navigation Functions
