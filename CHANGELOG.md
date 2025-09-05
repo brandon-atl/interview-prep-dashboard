@@ -1,5 +1,66 @@
 # Changelog - Google Play Interview Prep Dashboard
 
+## Session: September 5, 2025
+
+### Major Changes
+
+#### 🚫 Upload-First, Agnostic Dashboard
+- Removed all auto-loading and hardcoded/sampled data paths
+- Disabled all tabs until files are processed; Upload is the landing tab
+- Hid Interview Countdown until a JD file (filename contains "JD") with an `Interview Date:` is parsed
+- Replaced remaining static copy with placeholders; content is now derived only from uploaded files
+
+#### 🧭 Command Center Now Data-Driven
+- Metrics tiles: render only from uploaded metrics (CSV or extracted) with strict validation (currency/percent/M,B,K)
+- Removed CSV-from-text mis-parsing; CSV parsing occurs only for explicit metrics CSV uploads
+- Nonsense tiles eliminated; long labels/growth/context are truncated for clean UI
+- Added Copy Metrics button (Markdown)
+
+#### 🧠 Company Intel (Agnostic)
+- Added `extractCompanyIntelAgnostic()` to build a Markdown briefing from uploaded content:
+  - Detected tech stack, key metrics, strengths, and gaps
+- Render briefing as Markdown; added tech stack badges above briefing
+- Copy/Download briefing actions (Markdown)
+
+#### 📄 Resume Integration
+- Text extraction from uploaded resume files (filename contains "resume")
+- Merged resume-derived strengths into Command Center strengths
+- Role inference from resume when not available elsewhere (prefers recent dated title lines)
+- PDF resumes supported via PDF.js; DOCX via Mammoth
+
+#### 🧩 SQL-Only Experience, With Helpers
+- SQL tab shows only if SQL is detected in uploads
+- Parsed ```sql fenced blocks and inline SELECT/WITH queries; best snippet auto-loads into editor
+- Snippet picker with file filter, source note, and Copy button
+- Dynamic schema (tables from SQL) and scenarios derived from document signals (retention, segmentation, optimization, pipelines)
+- Enriched SQL Context card: fills scale, volume, key challenge, tech stack, focus areas, and interviewers from data
+
+#### ✍️ Power Intro & Talking Points
+- Power Intro generator is now agnostic and built from your metrics, strengths, and tech stack
+- Talking Points generator derives Technical Relevance, Proof Points, and Strengths from uploaded content
+
+#### 🔖 Quick Tips
+- Tips generated from strengths, gaps, and tech stack; Generate Tips button added
+
+#### 📦 Snapshot Export
+- Export Snapshot (Markdown) and Copy Snapshot actions include: tech stack, metrics, strengths, gaps, panelists, top Q&A, SQL snippet list, and the executive brief
+
+### Technical Notes
+- Added resume-based helpers: role inference and strength extraction from uploaded resume files
+- Added PDF parsing to `readFileContent()` to support PDF uploads across the app
+- Added UI gating (`requires-data`) and disabled classes for tabs before processing
+- Added source notes/tooltips for metrics and SQL snippet sources
+
+### Files Updated (highlights)
+- `index.html`: upload-first UI, requires-data gating, toolbars (copy/export), tech badges, SQL picker filter
+- `assets/js/app.js`: upload-only logic, metrics sanitation, dynamic intel/contexts, SQL detection & picker, export/copy helpers, resume parsing & role inference, PDF parsing
+- `assets/css/styles.css`: disabled state for tabs/buttons
+
+### Migration/Usage
+- Start on Upload tab, add your files (JD, resume, Q&A, metrics CSV, intel/playbook)
+- Click Process Files — all tabs and content will derive from your materials
+- Use Copy/Export to share metrics/brief/snapshot; SQL features activate only when SQL is detected
+
 ## Session: August 30, 2025
 
 ### Major Changes

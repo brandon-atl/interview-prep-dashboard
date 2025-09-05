@@ -984,6 +984,25 @@ GROUP BY previous_tier, current_tier;`;
                         }
                     };
                     reader.readAsArrayBuffer(file);
+                } else if (name.endsWith('.pdf')) {
+                    reader.onload = async (e) => {
+                        try {
+                            await ensurePdfJs();
+                            if (!window.pdfjsLib) { resolve(''); return; }
+                            const buf = e.target.result;
+                            const doc = await pdfjsLib.getDocument({ data: buf }).promise;
+                            let text = '';
+                            for (let i = 1; i <= doc.numPages; i++) {
+                                const page = await doc.getPage(i);
+                                const content = await page.getTextContent();
+                                text += '\n' + content.items.map(it => it.str).join(' ');
+                            }
+                            resolve(text);
+                        } catch (err) {
+                            resolve('');
+                        }
+                    };
+                    reader.readAsArrayBuffer(file);
                 } else {
                     reader.onload = (e) => resolve(e.target.result);
                     reader.readAsText(file);
@@ -1151,6 +1170,8 @@ GROUP BY previous_tier, current_tier;`;
             
             // Extract strengths and gaps
             extractStrengthsAndGaps(combinedContent);
+            // Enhance strengths with resume content if available
+            try { mergeResumeStrengthsFromUploads(); } catch (e) { /* ignore */ }
             
             // Do not set hardcoded defaults; remain agnostic until files provide context
             
@@ -1159,6 +1180,14 @@ GROUP BY previous_tier, current_tier;`;
             
             // Extract company intelligence (agnostic)
             extractCompanyIntelAgnostic(combinedContent);
+
+            // Fallback: infer role from resume if not already set
+            try {
+                if (!appState.extractedData.role) {
+                    const inferredRole = inferRoleFromResumeUploads();
+                    if (inferredRole) appState.extractedData.role = inferredRole;
+                }
+            } catch (e) { /* ignore */ }
             
             // Preserve existing questions if they were already loaded from CSV
             if (!appState.extractedData.questions || appState.extractedData.questions.length === 0) {
@@ -5401,6 +5430,61 @@ ${highlights.join('\n')}
             } catch (e) {
                 return strengths;
             }
+        }
+
+        // Merge strengths from any uploaded resume file (filename contains 'resume')
+        function mergeResumeStrengthsFromUploads() {
+            const entries = Object.entries(appState.fileContents || {});
+            const resumeEntries = entries.filter(([name]) => /resume/i.test(name));
+            if (!resumeEntries.length) return;
+            let resumeText = '';
+            resumeEntries.forEach(([name, content]) => { if (content) resumeText += '\n' + content; });
+            if (!resumeText.trim()) return;
+            const extra = extractStrengthsFromResumeText(resumeText) || [];
+            if (!extra.length) return;
+            const curr = Array.isArray(appState.extractedData.strengths) ? appState.extractedData.strengths : [];
+            const merged = Array.from(new Set([...curr, ...extra])).slice(0, 18);
+            appState.extractedData.strengths = merged;
+        }
+
+        // Infer role from uploaded resume files if not otherwise found
+        function inferRoleFromResumeUploads() {
+            const entries = Object.entries(appState.fileContents || {});
+            const resumeEntries = entries.filter(([name]) => /resume/i.test(name));
+            if (!resumeEntries.length) return '';
+            const combined = resumeEntries.map(([n,c]) => c || '').join('\n');
+            return inferRoleFromResumeText(combined);
+        }
+
+        function inferRoleFromResumeText(text) {
+            if (!text) return '';
+            const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+            // Common title patterns
+            const titleRx = new RegExp(
+                '(?:Senior|Lead|Principal|Staff|Sr\.?|Jr\.?)?\s*' +
+                '(?:BI|Business Intelligence|Data|Analytics|Reporting)\s*' +
+                '(?:Analyst|Engineer|Scientist|Manager|Architect)',
+                'i'
+            );
+            const genericRx = /(Analyst|Engineer|Scientist|Manager)/i;
+            // Prefer lines near the top or labeled Experience with dates
+            const dateRx = /(20\d{2}|201\d|202\d).*?(Present|Current|\d{4})/i;
+
+            // 1) Look for a line with title + dates (most recent experience)
+            const dated = lines.find(l => titleRx.test(l) && dateRx.test(l));
+            if (dated) return (dated.match(titleRx) || [''])[0].trim();
+
+            // 2) Look in the first 40 lines for a title match
+            for (let i = 0; i < Math.min(lines.length, 40); i++) {
+                const l = lines[i];
+                if (titleRx.test(l)) return (l.match(titleRx) || [''])[0].trim();
+            }
+
+            // 3) Fallback: any title line
+            const any = lines.find(l => titleRx.test(l) || genericRx.test(l));
+            if (any) return (any.match(titleRx) || any.match(genericRx) || [''])[0].trim();
+
+            return '';
         }
 
         // Build metric tiles for the Command Center grid from key-metrics CSV
