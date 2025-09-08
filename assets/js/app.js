@@ -37,6 +37,23 @@ document.addEventListener('DOMContentLoaded', async function() {
             updateUploadChecklist();
             updateRequiresDataVisibility();
             updateSqlAvailabilityUI();
+            // Disable process button until files are selected
+            setProcessBtnEnabled(false);
+
+            // LLM toggle (optional). When deployed with /api/llm, this enables LLM assists.
+            window.__LLM_ENABLED__ = true;
+            // Optional: auto-load test files when ?test=1
+            try {
+                const params = new URLSearchParams(window.location.search || '');
+                if (params.get('test') === '1') {
+                    await loadTestFilesFromFolder();
+                }
+                // Debug toggle: ?debug=1 to show extraction details
+                if (params.get('debug') === '1') {
+                    window.__DEBUG__ = true;
+                    try { showToast('Debug mode enabled', 'info'); } catch (e) {}
+                }
+            } catch (e) { /* ignore */ }
         });
 
         async function initializeDashboard() {
@@ -130,6 +147,9 @@ document.addEventListener('DOMContentLoaded', async function() {
                         break;
                     case 'process-files':
                         processFiles();
+                        break;
+                    case 'load-test-files':
+                        loadTestFilesFromFolder();
                         break;
                     // Sample loading disabled; require user uploads
                     case 'gen-power-intro':
@@ -350,15 +370,33 @@ GROUP BY previous_tier, current_tier;`;
 
         function updateDataStatus(message, type = 'info') {
             const statusDiv = document.getElementById('dataStatus');
-            if (statusDiv) {
-                const colors = {
-                    success: '#22c55e',
-                    error: '#ef4444',
-                    warning: '#f59e0b',
-                    info: '#64748b'
-                };
-                statusDiv.innerHTML = `<p style="color: ${colors[type]};">${message}</p>`;
-            }
+            if (!statusDiv) return;
+            const colors = { success:'#22c55e', error:'#ef4444', warning:'#f59e0b', info:'#64748b' };
+            const s = appState.uploadStatus || {};
+            const d = appState.extractedData || {};
+            const pills = [
+                { label:'Resume', ok: !!s.hasResume },
+                { label:'Job Description', ok: !!s.hasJD },
+                { label:'Company Intel', ok: !!s.hasIntel },
+                { label:'Additional Resources', ok: !!s.hasResources }
+            ].map(p => `<span style="display:inline-block;margin:0 .5rem .5rem 0;padding:.25rem .5rem;border-radius:9999px;background:${p.ok?'#dcfce7':'#fee2e2'};color:${p.ok?'#166534':'#991b1b'};font-size:.75rem;transition:all .25s ease;">${p.ok?'✓':'✗'} ${p.label}</span>`).join('');
+            const counts = [
+                { k:'Panelists', v:(d.panelists||[]).length },
+                { k:'Questions', v:(d.questions||[]).length },
+                { k:'Stories', v:(d.stories||[]).length },
+                { k:'Metrics', v:(d.metrics||[]).length },
+                { k:'SQL Snippets', v:(appState.sqlSnippets||[]).length }
+            ].map(c => `<div style="padding:.35rem .6rem;border-radius:.375rem;background:#f8fafc;">${c.k}: <strong>${c.v}</strong></div>`).join('');
+            const header = message ? `<p style="color:${colors[type]}; margin-bottom:.5rem;">${message}</p>` : '';
+            statusDiv.innerHTML = `${header}<div style="margin-bottom:.5rem;">${pills}</div><div style="display:flex;gap:.5rem;flex-wrap:wrap;">${counts}</div>`;
+            try { statusDiv.animate([{opacity:.6},{opacity:1}], {duration:250,easing:'ease'}); } catch(e) {}
+        }
+
+        function setProcessBtnEnabled(enabled) {
+            const btn = document.querySelector('[data-action="process-files"]');
+            if (!btn) return;
+            btn.disabled = !enabled;
+            try { btn.animate([{opacity:0.9},{opacity:1}], {duration:180,easing:'ease'}); } catch(e) {}
         }
 
         function setTabsEnabled(enabled) {
@@ -578,22 +616,41 @@ GROUP BY previous_tier, current_tier;`;
 
         function updateUploadChecklist() {
             const files = Object.keys(appState.fileContents || {});
-            const hasJD = files.some(n => /jd/i.test(n));
-            const hasQA = files.some(n => /question|q\s*&?a|q&a/i.test(n));
-            const hasMetrics = files.some(n => /metric/i.test(n) && /\.csv$/i.test(n));
-            const hasIntel = files.some(n => /intel|playbook|strategy|brief/i.test(n));
+            const hasResume = files.some(n => /resume/i.test(n));
+            const hasJD = files.some(n => /jd|job\s*description/i.test(n));
+            const hasIntel = files.some(n => /intel|playbook|strategy|brief|company/i.test(n));
+            // Additional resources: anything uploaded besides resume/JD/intel
+            const known = (n) => /resume/i.test(n) || /jd|job\s*description/i.test(n) || /intel|playbook|strategy|brief|company/i.test(n);
+            const hasResources = files.some(n => !known(n));
 
-            function setCheck(id, ok) {
+            function setCheck(id, ok, type) {
                 const el = document.getElementById(id);
                 if (!el) return;
-                el.style.borderLeftColor = ok ? '#22c55e' : (id === 'check-jd' ? '#ef4444' : '#eab308');
-                el.style.background = ok ? '#f0fdf4' : (id === 'check-jd' ? '#fff7ed' : '#fefce8');
+                el.style.transition = 'all .25s ease';
+                if (id === 'check-resume') {
+                    el.style.borderLeftColor = '#0ea5e9';
+                    el.style.background = '#eff6ff';
+                    el.style.boxShadow = ok ? '0 0 0 3px rgba(14,165,233,0.18)' : 'none';
+                } else if (id === 'check-intel') {
+                    el.style.borderLeftColor = '#eab308';
+                    el.style.background = '#fefce8';
+                    el.style.boxShadow = ok ? '0 0 0 3px rgba(234,179,8,0.18)' : 'none';
+                } else if (id === 'check-jd') {
+                    el.style.borderLeftColor = '#ef4444';
+                    el.style.background = '#fff7ed';
+                    el.style.boxShadow = ok ? '0 0 0 3px rgba(34,197,94,0.15)' : 'none';
+                } else { // resources
+                    el.style.borderLeftColor = '#22c55e';
+                    el.style.background = '#f0fdf4';
+                    el.style.boxShadow = ok ? '0 0 0 3px rgba(34,197,94,0.15)' : 'none';
+                }
+                try { el.animate([{transform:'scale(1)'},{transform:'scale(1.01)'},{transform:'scale(1)'}], {duration:250, easing:'ease'}); } catch(e) {}
             }
 
-            setCheck('check-jd', hasJD);
-            setCheck('check-qa', hasQA);
-            setCheck('check-metrics', hasMetrics);
-            setCheck('check-intel', hasIntel);
+            setCheck('check-resume', hasResume, 'required');
+            setCheck('check-jd', hasJD, 'required');
+            setCheck('check-intel', hasIntel, 'intel');
+            setCheck('check-resources', hasResources, 'resources');
         }
 
         function updateRequiresDataVisibility() {
@@ -649,6 +706,57 @@ GROUP BY previous_tier, current_tier;`;
             const lower = (text || '').toLowerCase();
             terms.forEach(t => { if (lower.includes(t.toLowerCase())) found.push(t); });
             return Array.from(new Set(found));
+        }
+
+        // Infer company and role from raw text content
+        function inferCompanyAndRoleFromText(text) {
+            const out = { company: '', role: '' };
+            if (!text) return out;
+            try {
+                const t = String(text).replace(/[\u2013\u2014]/g, '-');
+                // Prefer explicit labels, even without newlines
+                let m = t.match(/Company(?:\s*Name)?\s*[:\-–—]\s*([A-Z][A-Za-z0-9&().,'\-\s]{2,80})/i);
+                if (m) out.company = (m[1] || '').trim();
+                if (!out.company) {
+                    m = t.match(/Employer\s*[:\-–—]\s*([A-Z][A-Za-z0-9&().,'\-\s]{2,80})/i);
+                    if (m) out.company = (m[1] || '').trim();
+                }
+
+                // Role/Title extraction
+                m = t.match(/(?:Job\s*Title|Title|Position|Role)\s*[:\-–—]\s*([^\n]{2,80})/i);
+                if (m) out.role = (m[1] || '').trim();
+                if (!out.role) {
+                    const titleRx = /((Senior|Lead|Principal|Staff)\s+)?(BI|Business\s*Intelligence|Data|Analytics)\s+(Analyst|Engineer|Scientist|Manager|Architect)/i;
+                    const m2 = t.match(titleRx);
+                    if (m2) out.role = (m2[0] || '').trim();
+                }
+            } catch (e) { /* ignore */ }
+            return out;
+        }
+
+        // Infer company and role from filenames (e.g., "JD - Acme Corp - Data Analyst.pdf")
+        function inferCompanyAndRoleFromFilenames(files) {
+            const out = { company: '', role: '' };
+            if (!Array.isArray(files)) return out;
+            for (const f of files) {
+                const base = String(f || '').split(/[\\\/]/).pop().replace(/\.[^.]+$/, '');
+                if (/\bJD\b/i.test(base) || /job\s*description/i.test(base)) {
+                    // Remove anything before JD
+                    let s = base.replace(/^.*?\b(JD|Job\s*Description)\b\s*[-–:]?\s*/i, '');
+                    const parts = s.split(/\s*[-–]\s*/);
+                    if (parts.length >= 2) {
+                        if (!out.company) out.company = parts[0].trim();
+                        if (!out.role) out.role = parts.slice(1).join(' - ').trim();
+                    }
+                }
+                // Resume pattern like "ICT - Brandon Abbott Resume"
+                if (!out.company && /resume/i.test(base)) {
+                    const m = base.match(/^(.+?)\s*[-–]/);
+                    if (m) out.company = (m[1] || '').trim();
+                }
+                if (out.company && out.role) break;
+            }
+            return out;
         }
 
         function extractTablesFromSQLSnippets() {
@@ -841,8 +949,8 @@ GROUP BY previous_tier, current_tier;`;
 
         // Build a company intel markdown summary from uploaded content
         function extractCompanyIntelAgnostic(content) {
-            const company = appState.extractedData.company || '';
-            const role = appState.extractedData.role || '';
+            const company = cleanCompanyDisplayName(appState.extractedData.company || '') || '';
+            const role = cleanRoleTitle(appState.extractedData.role || '') || '';
             const tech = deriveTechStack(content);
             const strengths = appState.extractedData.strengths || [];
             const gaps = appState.extractedData.gaps || [];
@@ -961,6 +1069,8 @@ GROUP BY previous_tier, current_tier;`;
                 fileItem.appendChild(fileInfo);
                 fileList.appendChild(fileItem);
             });
+            // Enable process button if files selected
+            setProcessBtnEnabled(appState.uploadedFiles.length > 0);
         }
 
         async function readFileContent(file) {
@@ -1012,16 +1122,25 @@ GROUP BY previous_tier, current_tier;`;
 
         async function processFiles() {
             const processBtn = document.querySelector('#processBtnText');
+            const processBtnEl = document.querySelector('[data-action="process-files"]');
+            if (!appState.uploadedFiles || appState.uploadedFiles.length === 0) {
+                updateDataStatus('No files selected. Please add files to process.', 'warning');
+                showToast('Please add files to process', 'warning');
+                return;
+            }
             if (processBtn) {
                 processBtn.textContent = 'Processing...';
             }
+            if (processBtnEl) processBtnEl.disabled = true;
             
             showToast('Processing files...', 'info');
             
             try {
+                let processedCount = 0;
                 for (const file of appState.uploadedFiles) {
                     const content = await readFileContent(file);
                     appState.fileContents[file.name] = content;
+                    if (content && String(content).trim().length > 0) processedCount++;
                     
                     // Check if this is a CSV file with questions
                     if (file.name.toLowerCase().includes('questions') && file.name.endsWith('.csv')) {
@@ -1105,7 +1224,7 @@ GROUP BY previous_tier, current_tier;`;
                     }
                 }
                 
-                extractDataFromFiles();
+                await extractDataFromFiles();
                 updateUploadChecklist();
                 appState.dataLoaded = true;
                 setTabsEnabled(true);
@@ -1119,10 +1238,14 @@ GROUP BY previous_tier, current_tier;`;
                 // Fill SQL editor if we found any snippets
                 populateSQLEditorFromSnippets();
                 updateSqlSnippetList();
-
-                updateDataStatus('Files processed successfully!', 'success');
-                showToast('Files processed successfully!', 'success');
-                switchTab('command');
+                if (processedCount > 0) {
+                    updateDataStatus('Files processed successfully!', 'success');
+                    showToast('Files processed successfully!', 'success');
+                    switchTab('command');
+                } else {
+                    updateDataStatus('No readable content found in the selected files.', 'warning');
+                    showToast('No readable content found. Please try different files.', 'warning');
+                }
 
             } catch (error) {
                 console.error('Error processing files:', error);
@@ -1131,45 +1254,106 @@ GROUP BY previous_tier, current_tier;`;
                 if (processBtn) {
                     processBtn.textContent = 'Process Files';
                 }
+                if (processBtnEl) processBtnEl.disabled = !(appState.uploadedFiles && appState.uploadedFiles.length > 0);
             }
         }
 
-        function extractDataFromFiles() {
+        async function extractDataFromFiles() {
             // Enhanced extraction logic
             const combinedContent = Object.values(appState.fileContents).join('\n');
+            const fileNames = Object.keys(appState.fileContents || {});
+            const hasJDFile = fileNames.some(n => /\b(jd|job\s*description)\b/i.test(n));
             
-            // Extract company and role from Strategic Intelligence or other docs
-            const googlePlayMatch = combinedContent.match(/Google Play (?:BI\/)?(?:Data )?Analyst/i);
-            const roleMatch = combinedContent.match(/(?:Role|Position|Title):\s*([^\n]+)/i) || 
-                             combinedContent.match(/BI\/Data Analyst[^\n]*/i);
+            // Detect candidate name early (from resume files) to avoid false panelists
+            try { detectCandidateNameFromUploads(); } catch (e) { /* ignore */ }
+
+            // Prefer company + role from JD uploads if present
+            try {
+                const fromJD = extractCompanyRoleFromJDUploads();
+                if (fromJD.company) appState.extractedData.company = fromJD.company;
+                if (fromJD.role) appState.extractedData.role = fromJD.role;
+            } catch (e) { /* ignore */ }
+
+            // Extract company and role from uploaded text and filenames (agnostic)
+            const inferredTxt = inferCompanyAndRoleFromText(combinedContent);
+            const inferredNames = inferCompanyAndRoleFromFilenames(Object.keys(appState.fileContents || {}));
+            const roleLineMatch = combinedContent.match(/(?:^|\n)\s*(Role|Position|Title)\s*[:\-–]\s*([^\n]+)/i);
+            const companyLineMatch = combinedContent.match(/(?:^|\n)\s*(Company|Company Name|Employer|Organization|Client)\s*[:\-–]\s*([^\n]+)/i);
+            const candidates = {
+                company: appState.extractedData.company || (companyLineMatch && companyLineMatch[2].trim()) || inferredTxt.company || inferredNames.company,
+                role: appState.extractedData.role || (roleLineMatch && roleLineMatch[2].trim()) || inferredTxt.role || inferredNames.role
+            };
+            if (candidates.company) appState.extractedData.company = candidates.company;
+            if (candidates.role) appState.extractedData.role = candidates.role;
+
+            // LLM assist for company/role if still missing
+            try {
+                if (window.__LLM_ENABLED__ && (!appState.extractedData.company || !appState.extractedData.role)) {
+                    const cr = await llmExtract('companyRole', combinedContent);
+                    if (cr) {
+                        if (!appState.extractedData.company && cr.company) appState.extractedData.company = cleanCompanyDisplayName(cr.company);
+                        if (!appState.extractedData.role && cr.role) appState.extractedData.role = cleanRoleTitle(cr.role);
+                    }
+                }
+            } catch (e) { /* ignore */ }
             
-            if (googlePlayMatch) {
-                appState.extractedData.company = 'Google';
-                appState.extractedData.role = googlePlayMatch[0];
-            } else {
-                const companyMatch = combinedContent.match(/(?:company|employer):\s*([^\n]+)/i);
-                if (companyMatch) {
-                    appState.extractedData.company = companyMatch[1].trim();
-                }
-                if (roleMatch) {
-                    appState.extractedData.role = roleMatch[1].trim();
-                }
+            // Prefer JD-derived panelists; only use generic sources if no JD file is present
+            if (!hasJDFile) {
+                try { extractInterviewerInfo(combinedContent); } catch (e) { /* ignore */ }
+                try { extractPanelistDetailsFromQA(combinedContent); } catch (e) { /* ignore */ }
             }
-            
-            // Extract interviewer information from Strategic Intelligence docs
-            extractInterviewerInfo(combinedContent);
-            
-            // Extract additional panelist data from structured Q&A document
-            extractPanelistDetailsFromQA(combinedContent);
+
+            // Populate/override panelists from uploaded JD file(s)
+            try { await extractPanelistsFromJDUploads(); } catch (e) { /* ignore */ }
             
             // Extract STAR stories from documents
             extractSTARStories(combinedContent);
+            try {
+                if ((appState.extractedData.stories || []).length < 2 && window.__LLM_ENABLED__) {
+                    const llmStories = await llmExtract('star', combinedContent);
+                    if (Array.isArray(llmStories) && llmStories.length) {
+                        const merged = mergeStories((appState.extractedData.stories || []), llmStories);
+                        appState.extractedData.stories = merged.slice(0, 12);
+                    }
+                }
+            } catch (e) { /* ignore */ }
             
-            // Extract key metrics
+            // Extract key metrics (text + CSV), then optional LLM supplement
             extractKeyMetrics(combinedContent);
+            try {
+                if (window.__LLM_ENABLED__ && (!appState.extractedData.metrics || appState.extractedData.metrics.length === 0)) {
+                    const mx = await llmExtract('metrics', combinedContent);
+                    if (Array.isArray(mx) && mx.length) {
+                        const existing = new Set((appState.extractedData.metrics||[]).map(m => `${m.label}|${m.value}`));
+                        const merged = (appState.extractedData.metrics||[]).slice();
+                        mx.forEach(m => {
+                            const key = `${m.label}|${m.value}`;
+                            if (!existing.has(key)) merged.push(m);
+                        });
+                        appState.extractedData.metrics = merged.slice(0, 12);
+                    }
+                }
+            } catch (e) { /* ignore */ }
             
             // Extract strengths and gaps
             extractStrengthsAndGaps(combinedContent);
+            try {
+                if (window.__LLM_ENABLED__) {
+                    const sg = await llmExtract('strengths', combinedContent);
+                    if (sg) {
+                        if (Array.isArray(sg.strengths)) {
+                            const curr = new Set((appState.extractedData.strengths||[]));
+                            sg.strengths.forEach(s => curr.add(s));
+                            appState.extractedData.strengths = Array.from(curr).slice(0, 18);
+                        }
+                        if (Array.isArray(sg.gaps)) {
+                            const currG = new Set((appState.extractedData.gaps||[]));
+                            sg.gaps.forEach(s => currG.add(s));
+                            appState.extractedData.gaps = Array.from(currG).slice(0, 12);
+                        }
+                    }
+                }
+            } catch (e) { /* ignore */ }
             // Enhance strengths with resume content if available
             try { mergeResumeStrengthsFromUploads(); } catch (e) { /* ignore */ }
             
@@ -1177,6 +1361,14 @@ GROUP BY previous_tier, current_tier;`;
             
             // Extract questions from Q&A documents
             extractQuestionsFromContent(combinedContent);
+            try {
+                if (window.__LLM_ENABLED__ && (!appState.extractedData.questions || appState.extractedData.questions.length === 0)) {
+                    const qs = await llmExtract('questions', combinedContent);
+                    if (Array.isArray(qs) && qs.length) {
+                        appState.extractedData.questions = qs;
+                    }
+                }
+            } catch (e) { /* ignore */ }
             
             // Extract company intelligence (agnostic)
             extractCompanyIntelAgnostic(combinedContent);
@@ -1193,6 +1385,566 @@ GROUP BY previous_tier, current_tier;`;
             if (!appState.extractedData.questions || appState.extractedData.questions.length === 0) {
                 appState.extractedData.questions = [];
             }
+
+            // Final sanitation: never include candidate as panelist
+            try { ensureCandidateNotListedAsPanelist(); } catch (e) { /* ignore */ }
+        }
+
+        // --- Company/Role extraction from JD uploads ---
+        function cleanRoleTitle(title) {
+            let s = String(title || '').trim();
+            if (!s) return '';
+            s = s.replace(/https?:\/\/\S+/g, '')
+                 .replace(/[\u2013\u2014]/g, '-')
+                 .replace(/^[\-:•\s]+|[\-:•\s]+$/g, '')
+                 .replace(/\s{2,}/g, ' ');
+            // Stop at section labels that sometimes get concatenated in PDFs
+            s = s.replace(/\s*(?:Location|Department|Employment\s*Type|Salary|Website|Company|Recruiter|Contact|Reports?\s*To)\b[\s\S]*$/i, '').trim();
+            // Remove trailing parenthetical fragments
+            s = s.replace(/\s*\([^)]*\)\s*$/, '').trim();
+            // Drop obvious non-role noise
+            if (/\b(questions?|playbook|brief|analysis|intel|strategy|notes?)\b/i.test(s)) return '';
+            const roleRx = /(Analyst|Engineer|Scientist|Manager|Architect|Director|Lead|Head|Specialist|Consultant)/i;
+            if (!roleRx.test(s)) return '';
+            // Limit to 8 words to avoid run-on text
+            const words = s.split(/\s+/);
+            if (words.length > 8) s = words.slice(0,8).join(' ');
+            // Title-case
+            s = s.split(' ').map(w => (/^[A-Z0-9]{2,}$/.test(w) ? w : (w.charAt(0).toUpperCase()+w.slice(1).toLowerCase()))).join(' ');
+            return s.substring(0, 80).trim();
+        }
+
+        function extractCompanyRoleFromJDText(text) {
+            if (!text) return { company: '', role: '' };
+            const t = String(text).replace(/[\u2013\u2014]/g, '-');
+            let company = '';
+            let role = '';
+            let m;
+            m = t.match(/Company\s*Name\s*[:\-–—]\s*([^\n]{2,180})/i) || t.match(/Company\s*[:\-–—]\s*([^\n]{2,180})/i) || t.match(/Employer\s*[:\-–—]\s*([^\n]{2,180})/i);
+            if (m) {
+                // Trim at sentence/punctuation or section keyword to avoid pulling full paragraph
+                let raw = (m[1] || '').trim();
+                raw = raw.split(/\s*(?:\.|;|\||\-|\bWebsite\b|\bJob\s*Title\b|\bLocation\b|\bDepartment\b)\s*/i)[0];
+                company = cleanCompanyDisplayName(raw);
+            }
+            m = t.match(/(Job\s*Title|Title|Position|Role)\s*[:\-–—]\s*([^\n]{2,160})/i);
+            if (m) role = cleanRoleTitle(m[2]);
+            return { company, role };
+        }
+
+        function extractCompanyRoleFromJDUploads() {
+            const entries = Object.entries(appState.fileContents || {});
+            const jdEntries = entries.filter(([name]) => /\bjd\b/i.test(name) || /job\s*description/i.test(name));
+            let best = { company: '', role: '' };
+            for (const [name, text] of jdEntries) {
+                const { company, role } = extractCompanyRoleFromJDText(text || '');
+                if (company && !best.company) best.company = company;
+                if (role && !best.role) best.role = role;
+                if (best.company && best.role) break;
+            }
+            // Fallback to filename if still missing
+            if ((!best.company || !best.role) && jdEntries.length) {
+                const base = jdEntries[0][0];
+                const fromName = inferCompanyAndRoleFromFilenames([base]);
+                if (!best.company && fromName.company) best.company = cleanCompanyDisplayName(fromName.company);
+                if (!best.role && fromName.role) best.role = cleanRoleTitle(fromName.role);
+            }
+            return best;
+        }
+
+        // Parse panelists from uploaded JD files (filenames containing 'JD')
+        async function extractPanelistsFromJDUploads() {
+            const entries = Object.entries(appState.fileContents || {});
+            const dbg = { viaLinkedIn: [], viaBullets: [], viaFallback: [], viaLLM: [], viaRescue: [], final: [] };
+            // Prefer files likely to be JD
+            // Only consider canonical JD files; avoid Q&A/Interview banks that include the word "interview"
+            const jdEntries = entries.filter(([name]) => /\b(jd|job\s*description)\b/i.test(name));
+            let all = [];
+            if (jdEntries.length > 0) {
+                jdEntries.forEach(([name, text]) => {
+                    // 1) Anchor on LinkedIn URLs which are highly reliable in this JD
+                    let found = extractPanelistsViaLinkedIn(text || '');
+                    if (found.length) dbg.viaLinkedIn.push(...found.map(p=>({source:name,...p})));
+                    // 2) Structured bullets parser
+                    if (!found.length) found = parsePanelistsFromJDText(text || '');
+                    if (found.length) { all.push(...found); dbg.viaBullets.push(...found.map(p=>({source:name,...p}))); }
+                    // Fallback heuristics if the structured parser finds nothing
+                    if (!found.length) {
+                        const alt = robustPanelistsFromPdf(text || '');
+                        if (alt.length) { all.push(...alt); dbg.viaFallback.push(...alt.map(p=>({source:name,...p}))); }
+                    }
+                });
+                // 3) Optional LLM assist over combined JD content
+                try {
+                    if (window.__LLM_ENABLED__) {
+                        const combinedJD = jdEntries.map(([n,t]) => t || '').join('\n');
+                        const llm = await llmExtract('panelists', combinedJD);
+                        if (Array.isArray(llm) && llm.length) {
+                            const mapped = llm.map(p => ({
+                                name: p.name,
+                                role: p.role,
+                                linkedin: p.linkedin || '',
+                                archetype: determineArchetypeFromRole(p.role)
+                            }));
+                            all.push(...mapped);
+                            dbg.viaLLM.push(...mapped);
+                        }
+                        // Always run rescue to capture any leftover link/name pairs
+                        const rescued = rescuePanelistsFromLinks(combinedJD);
+                        if (rescued.length) { all.push(...rescued); dbg.viaRescue.push(...rescued); }
+                    }
+                } catch (e) { /* ignore */ }
+            }
+            // Fallback: search across all content for an "Interviewing With" section
+            if (all.length === 0 && jdEntries.length === 0) {
+                const combined = Object.values(appState.fileContents || {}).join('\n');
+                all = parsePanelistsFromJDText(combined || '');
+                if (!all.length) {
+                    all = robustPanelistsFromPdf(combined || '');
+                }
+            }
+            if (all.length === 0) return;
+            // Deduplicate by name (case-insensitive)
+            const byName = new Map();
+            all.forEach(p => {
+                if (!p || !p.name) return;
+                const key = p.name.toLowerCase();
+                if (!byName.has(key)) byName.set(key, p);
+            });
+            const jdPanelists = Array.from(byName.values());
+            // Remove any that match the candidate's name
+            let filtered = removeCandidateFromList(jdPanelists);
+            // Prefer entries that have LinkedIn links and valid roles
+            const roleRx = /(CIO|CTO|CEO|CFO|Chief\s+\w+|Director|Manager|Architect|Engineer|Scientist|Lead|Head|Recruiter|Talent|Solution|Power\s*BI|Developer|Analyst|Consultant)/i;
+            const score = p => (p.linkedin && /linkedin\.com\/in/i.test(p.linkedin) ? 2 : 0) + (p.role && (/[a-z]/.test(p.role) || roleRx.test(p.role)) ? 1 : 0);
+            filtered = filtered.sort((a,b) => score(b)-score(a));
+            if (filtered.length) {
+                appState.extractedData.panelists = filtered;
+            }
+            // Save debug snapshot
+            try { window.__PANELIST_DEBUG__ = { ...dbg, final: filtered }; } catch (e) {}
+        }
+
+        function renderPanelistDebug() {
+            if (!window.__DEBUG__) return;
+            const host = document.getElementById('panelistsContainer');
+            if (!host) return;
+            let box = document.getElementById('panelistDebug');
+            if (!box) {
+                box = document.createElement('div');
+                box.id = 'panelistDebug';
+                box.style.cssText = 'margin-bottom:1rem; padding:0.75rem; background:#fff7ed; border:1px solid #fde68a; border-radius:8px;';
+                host.parentNode.insertBefore(box, host);
+            }
+            const d = window.__PANELIST_DEBUG__ || {};
+            const fmt = (arr) => (Array.isArray(arr) && arr.length) ? arr.map(p=>`${p.name}${p.role?` — ${p.role}`:''}${p.linkedin?` (${p.linkedin})`:''}`).join('<br>') : '<em>none</em>';
+            box.innerHTML = `
+                <details open>
+                    <summary style="cursor:pointer; font-weight:600; color:#b45309;">Debug: Panelist Extraction</summary>
+                    <div style="font-size:0.9rem; line-height:1.5; margin-top:0.5rem;">
+                        <div><strong>LinkedIn‑anchored:</strong><br>${fmt(d.viaLinkedIn)}</div>
+                        <div style="margin-top:0.5rem;"><strong>Bullets:</strong><br>${fmt(d.viaBullets)}</div>
+                        <div style="margin-top:0.5rem;"><strong>Fallback (PDF):</strong><br>${fmt(d.viaFallback)}</div>
+                        <div style="margin-top:0.5rem;"><strong>LLM:</strong><br>${fmt(d.viaLLM)}</div>
+                        <div style="margin-top:0.5rem;"><strong>Rescued:</strong><br>${fmt(d.viaRescue)}</div>
+                        <div style="margin-top:0.5rem;"><strong>Final:</strong><br>${fmt(d.final)}</div>
+                    </div>
+                </details>`;
+        }
+
+        // Rescue pass: for documents where the link lines detached from the bullets,
+        // pair each linkedin.com/in URL with the nearest above line that looks like a person name.
+        function rescuePanelistsFromLinks(text) {
+            const out = [];
+            if (!text) return out;
+            const lines = String(text).split(/\r?\n/);
+            const linkRe = /https?:\/\/www\.linkedin\.com\/in\/[A-Za-z0-9\-_%]+\/?/i;
+            const nameRoleLoose = /^\s*(?:[-*•–·]|\d+\.)?\s*([A-Z][A-Za-z'’.\-]+(?:\s+[A-Z][A-Za-z'’.\-]+){1,2})\s*,?\s*([^()]{0,160})?\s*$/;
+            for (let i = 0; i < lines.length; i++) {
+                const ln = (lines[i]||'').trim();
+                const m = ln.match(linkRe);
+                if (!m) continue;
+                const link = m[0];
+                const prev = (lines[i-1]||'').trim();
+                const prev2 = (lines[i-2]||'').trim();
+                const tryLine = (s) => {
+                    const mm = s.match(nameRoleLoose);
+                    if (!mm) return false;
+                    const name = (mm[1]||'').trim();
+                    let role = (mm[2]||'').trim();
+                    if (!name) return false;
+                    if (!/^([A-Z][a-z'’.\-]+\s+[A-Z][a-z'’.\-]+(?:\s+[A-Z][a-z'’.\-]+)?)$/.test(name)) return false;
+                    if (!role || role.length < 2) role = '';
+                    out.push({ name, role, linkedin: link, archetype: determineArchetypeFromRole(role) });
+                    return true;
+                };
+                if (tryLine(prev)) continue;
+                tryLine(prev2);
+            }
+            // Deduplicate by name
+            const byName = new Map();
+            out.forEach(p => { const k = p.name.toLowerCase(); if (!byName.has(k)) byName.set(k, p); });
+            return Array.from(byName.values());
+        }
+
+        // Use LinkedIn anchors to reliably extract Name, Role near each link
+        function extractPanelistsViaLinkedIn(text) {
+            if (!text) return [];
+            const results = [];
+            const t = String(text).replace(/[\u2013\u2014]/g, '-')
+                                  .replace(/\s{2,}/g, ' ')
+                                  .replace(/(•|\u2022|\u25CF)/g, '\n• ');
+            const linkRe = /https?:\/\/www\.linkedin\.com\/in\/[A-Za-z0-9\-_%]+\/?/gi;
+            const isLikelyPersonName = (n) => {
+                if (!n) return false;
+                const tokens = n.trim().split(/\s+/);
+                if (tokens.length < 2 || tokens.length > 3) return false;
+                // Reject ALLCAPS tokens and ensure title case-ish
+                let ok = 0;
+                for (const tok of tokens) {
+                    if (/^[A-Z][a-z'’.\-]+$/.test(tok)) ok++;
+                    if (/^[A-Z]{3,}$/.test(tok)) return false;
+                }
+                return ok >= 2;
+            };
+            const roleRx = /(CIO|CTO|CEO|CFO|Chief\s+\w+|Director|Manager|Architect|Engineer|Scientist|Lead|Head|Recruiter|Talent|Solution|Power\s*BI|Developer|Analyst|Consultant)/i;
+            const isValidRole = r => r && r.length >= 2 && (/[a-z]/.test(r) || roleRx.test(r));
+
+            let m;
+            while ((m = linkRe.exec(t)) !== null) {
+                const link = m[0];
+                const start = Math.max(0, m.index - 220); // look back a couple hundred chars
+                const before = t.slice(start, m.index);
+                // Try last comma segment as role and preceding as name
+                let seg = before.replace(/\n/g, ' ').trim();
+                // remove trailing punctuation
+                seg = seg.replace(/[()]+$/g, '').trim();
+                // Pull "Name, Role" near the end
+                let mr = seg.match(/([A-Z][A-Za-z'’.\-]+(?:\s+[A-Z][A-Za-z'’.\-]+){1,2})\s*,\s*([^,;|()]{2,160})$/);
+                if (!mr) {
+                    // fallback: previous line heuristic
+                    const lines = before.split(/\n/).map(s=>s.trim()).filter(Boolean);
+                    const last = lines[lines.length-1] || '';
+                    const prev = lines[lines.length-2] || '';
+                    mr = last.match(/([A-Z][A-Za-z'’.\-]+(?:\s+[A-Z][A-Za-z'’.\-]+){1,2})\s*,\s*([^,;|()]{2,160})$/) ||
+                         prev.match(/([A-Z][A-Za-z'’.\-]+(?:\s+[A-Z][A-Za-z'’.\-]+){1,2})\s*,\s*([^,;|()]{2,160})$/);
+                    // second fallback: scan last 120 chars for a likely name, then take words after comma as role
+                    if (!mr) {
+                        const tail = seg.slice(-120);
+                        const nameOnly = tail.match(/([A-Z][A-Za-z'’.\-]+(?:\s+[A-Z][A-Za-z'’.\-]+){1,2})\s*,?\s*([^,;|()]{0,160})/);
+                        if (nameOnly) mr = nameOnly; // role may be empty; we'll keep the entry anyway
+                    }
+                }
+                if (mr) {
+                    const name = mr[1].trim();
+                    const role = (mr[2] || '').trim();
+                    if (isLikelyPersonName(name) && isValidRole(role)) {
+                        const item = { name, role, linkedin: link, archetype: determineArchetypeFromRole(role) };
+                        if (!results.some(p => p.name.toLowerCase() === name.toLowerCase())) results.push(item);
+                    } else if (isLikelyPersonName(name)) {
+                        // keep if name is valid even when role couldn't be parsed
+                        const item = { name, role: role || '', linkedin: link, archetype: determineArchetypeFromRole(role || '') };
+                        if (!results.some(p => p.name.toLowerCase() === name.toLowerCase())) results.push(item);
+                    }
+                }
+            }
+            return results.slice(0, 6);
+        }
+
+        function parsePanelistsFromJDText(text) {
+            if (!text) return [];
+            // Normalize dashes and inject newlines before bullets to handle PDF text without line breaks
+            let t = String(text).replace(/[\u2013\u2014]/g, '-')
+                                .replace(/(•|\u2022|\u25CF)/g, '\n• ');
+            const sectionHasLinkedin = /linkedin\.com\/in/i.test(t);
+            const roleRx = /(CIO|CTO|CEO|CFO|Chief\s+\w+|Director|Manager|Architect|Engineer|Scientist|Lead|Head|Recruiter|Talent|Solution|Power\s*BI|Developer|Analyst|Consultant)/i;
+            const isValidRole = r => r && r.length >= 3 && (/[a-z]/.test(r) || roleRx.test(r));
+            const isLikelyPersonName = n => {
+                if (!n) return false;
+                const tokens = n.trim().split(/\s+/);
+                if (tokens.length < 2 || tokens.length > 3) return false;
+                let lowerCount = 0;
+                for (const tok of tokens) {
+                    if (/^[A-Z][a-z'’.\-]+$/.test(tok)) lowerCount++;
+                    if (/^[A-Z]{3,}$/.test(tok)) return false; // reject ALLCAPS chunks like SAP
+                }
+                return lowerCount >= 2;
+            };
+            // Find the "Interviewing With" window to reduce false positives
+            const startMatch = t.match(/interview\w*\s*with\s*[:\-–—]?/i) || t.match(/panelists?\s*[:\-–—]?/i) || t.match(/interviewers?\s*[:\-–—]?/i);
+            if (startMatch) {
+                const start = startMatch.index;
+                const after = t.slice(start);
+                const stopMatch = after.match(/\b(Job\s*Summary|Summary|About\s+the\s+Role|Responsibilities|Overview|Requirements|Qualifications)\b/i);
+                const end = stopMatch ? start + stopMatch.index : Math.min(t.length, start + 1500);
+                t = t.slice(start, end);
+            }
+            const lines = t.split(/\r?\n+/).map(s => s.trim()).filter(Boolean);
+            const results = [];
+            let inSection = false;
+            let sectionCountdown = 60;
+            const sectionRx = /(interview\w*\s*with|panel|panelists|interviewers?)/i;
+            const bulletRx = /^\s*(?:[-*•–·]|\d+\.|\*)\s*/;
+            const nameRoleRx = /^(?:[-*•–·]|\d+\.|\*)?\s*([A-Z][A-Za-z'’.\-]+(?:\s+[A-Z][A-Za-z'’.\-]+)+)\s*(?:[,–—-]|:\s*)?\s*([^()]{0,120}?)?\s*(?:\((https?:\/\/[^)]+)\))?\s*$/;
+
+            for (let i = 0; i < lines.length; i++) {
+                const raw = lines[i];
+                if (!raw) continue;
+                if (!inSection && sectionRx.test(raw)) { inSection = true; sectionCountdown = 60; continue; }
+                if (!inSection) continue;
+                if (sectionCountdown-- <= 0) break;
+
+                // Attach bare URL to the matching bullet line above; if the previous
+                // pushed entry is not the intended one (PDF line breaks), attempt to
+                // infer the name/role from the preceding 1–2 lines and create/merge.
+                const urlMatch = raw.match(/https?:\/\/\S+/);
+                if (urlMatch) {
+                    const link = urlMatch[0];
+                    let attached = false;
+                    if (results.length && !results[results.length - 1].linkedin) {
+                        results[results.length - 1].linkedin = link;
+                        attached = true;
+                    } else {
+                        const prev = (lines[i-1]||'').trim();
+                        const prev2 = (lines[i-2]||'').trim();
+                        const nameRoleLoose = /^\s*(?:[-*•–·]|\d+\.)?\s*([A-Z][A-Za-z'’.\-]+(?:\s+[A-Z][A-Za-z'’.\-]+){1,2})\s*,?\s*([^()]{0,160})?\s*$/;
+                        const tryLine = (ln) => {
+                            const m2 = ln.match(nameRoleLoose);
+                            if (m2) {
+                                const name = (m2[1]||'').trim();
+                                let role = (m2[2]||'').trim();
+                                if (!name) return false;
+                                if (!isLikelyPersonName(name)) return false;
+                                if (!isValidRole(role)) role = role || '';
+                                if (!results.some(r => r.name.toLowerCase() === name.toLowerCase())) {
+                                    results.push({ name, role, linkedin: link, archetype: determineArchetypeFromRole(role) });
+                                } else {
+                                    const idx = results.findIndex(r => r.name.toLowerCase() === name.toLowerCase());
+                                    if (idx >= 0 && !results[idx].linkedin) results[idx].linkedin = link;
+                                }
+                                return true;
+                            }
+                            return false;
+                        };
+                        if (prev && !attached) attached = tryLine(prev);
+                        if (!attached && prev2) attached = tryLine(prev2);
+                    }
+                    if (attached) continue; // handled the URL line
+                }
+
+                // Allow entries even without bullet prefix
+                if (!bulletRx.test(raw) && !nameRoleRx.test(raw)) continue;
+                const m = raw.match(nameRoleRx);
+                if (m) {
+                    const name = (m[1] || '').trim();
+                    let role = (m[2] || '').trim();
+                    const link = (m[3] || '').trim();
+                    if (!isLikelyPersonName(name)) continue;
+                    if (sectionHasLinkedin && !/linkedin\.com\/in/i.test(link)) continue;
+                    // If role couldn't be parsed reliably, keep the entry with empty role (we'll still show the panelist)
+                    if (!isValidRole(role)) role = role || '';
+                    results.push({ name, role, linkedin: link || '', archetype: determineArchetypeFromRole(role) });
+                }
+            }
+            // Inline scanner: handle no line breaks by scanning window text for Name, Role pairs
+            if (results.length === 0 && t) {
+                const reInline = /([A-Z][A-Za-z'’.\-]+(?:\s+[A-Z][A-Za-z'’.\-]+){1,2})\s*,\s*([^,;|()]{2,80})(?:\s*\((https?:\/\/[^)]+)\))?/g;
+                let m;
+                while ((m = reInline.exec(t)) !== null) {
+                    const name = m[1].trim();
+                    let role = (m[2] || '').trim();
+                    const link = (m[3] || '').trim();
+                    // exclude false positives where role looks like a sentence continuation
+                    if (/\b(Job\s*Summary|Summary|About\s+the\s+Role)\b/i.test(role)) continue;
+                    if (!isLikelyPersonName(name)) continue;
+                    if (!isValidRole(role)) role = role || '';
+                    if (sectionHasLinkedin && !/linkedin\.com\/in/i.test(link)) continue;
+                    results.push({ name, role, linkedin: link || '', archetype: determineArchetypeFromRole(role) });
+                }
+            }
+            return results.slice(0, 10);
+        }
+
+        // Robust fallback parser for PDFs with poor line structure
+        function toTitleCaseName(n) {
+            const isAllCaps = /^[A-Z][A-Z'’.\-]+(?:\s+[A-Z][A-Z'’.\-]+){1,3}$/.test(n);
+            if (!isAllCaps) return n;
+            return n.toLowerCase().replace(/\b([a-z])/g, m => m.toUpperCase());
+        }
+
+        function robustPanelistsFromPdf(text) {
+            if (!text) return [];
+            let t = String(text).replace(/[\u2013\u2014]/g, '-')
+                                .replace(/\s{2,}/g, ' ')
+                                .replace(/(•|\u2022|\u25CF)/g, '\n• ');
+            // Limit to a window after the interviewer anchor if possible
+            const anchor = t.search(/interview\w*\s*with/i);
+            if (anchor >= 0) t = t.slice(anchor, Math.min(t.length, anchor + 2000));
+
+            const results = [];
+            const sectionHasLinkedin = /linkedin\.com\/in/i.test(t);
+            const roleRx = /(CIO|CTO|CEO|CFO|Chief\s+\w+|Director|Manager|Architect|Engineer|Scientist|Lead|Head|Recruiter|Talent|Solution|Power\s*BI|Developer|Analyst|Consultant)/i;
+            const isValidRole = r => r && r.length >= 3 && (/[a-z]/.test(r) || roleRx.test(r));
+            const isLikelyPersonName = n => {
+                if (!n) return false;
+                const tokens = n.trim().split(/\s+/);
+                if (tokens.length < 2 || tokens.length > 3) return false;
+                let lowerCount = 0;
+                for (const tok of tokens) {
+                    if (/^[A-Z][a-z'’.\-]+$/.test(tok)) lowerCount++;
+                    if (/^[A-Z]{3,}$/.test(tok)) return false;
+                }
+                return lowerCount >= 2;
+            };
+            const push = (name, role, link) => {
+                if (!name) return;
+                let n = name.trim();
+                n = toTitleCaseName(n);
+                if (!/^([A-Z][A-Za-z'’.\-]+(?:\s+[A-Z][A-Za-z'’.\-]+){1,3})$/.test(n)) return;
+                const r = (role || '').trim();
+                const lnk = (link || '').trim();
+                if (!isLikelyPersonName(n) || !isValidRole(r)) return;
+                if (sectionHasLinkedin && !/linkedin\.com\/in/i.test(lnk)) return;
+                const item = { name: n, role: r, linkedin: lnk, archetype: determineArchetypeFromRole(r) };
+                if (!results.some(p => p.name.toLowerCase() === item.name.toLowerCase())) results.push(item);
+            };
+
+            // Pattern 1: single-line "Name, Role (link)"
+            const re1 = /(?:^|\n)\s*(?:[-*•–·]\s*)?([A-Z][A-Za-z'’.\-]+(?:\s+[A-Z][A-Za-z'’.\-]+){1,3})\s*,\s*([^\n()]{2,160})\s*(?:\((https?:\/\/[^)]+)\))?(?=\n|$)/g;
+            let m;
+            while ((m = re1.exec(t)) !== null) push(m[1], m[2], m[3]);
+
+            // Pattern 2: line break between name and role
+            if (results.length === 0) {
+                const lines = t.split(/\r?\n+/).map(s => s.trim()).filter(Boolean);
+                for (let i = 0; i < lines.length - 1; i++) {
+                    const ln = lines[i];
+                    const nx = lines[i+1];
+                    const nm = ln.match(/^([A-Z][A-Za-z'’.\-]+(?:\s+[A-Z][A-Za-z'’.\-]+){1,3}),?\s*$/);
+                    const roleRx = /(CIO|CTO|CEO|CFO|Chief\s+\w+|Director|Manager|Architect|Engineer|Scientist|Lead|Head|Recruiter|Talent|Program\s*Manager|Product\s*Manager|Solution|IT\s+.+|Power\s*BI\s+Architect|Developer)/i;
+                    if (nm && roleRx.test(nx)) {
+                        const link = (lines[i+2] && /https?:\/\//.test(lines[i+2])) ? lines[i+2] : '';
+                        push(nm[1], nx.replace(/^[\-:•\s]+/, ''), link);
+                    }
+                }
+            }
+
+            return results.slice(0, 10);
+        }
+
+        // --- Candidate name detection and panelist sanitization ---
+        function detectCandidateNameFromUploads() {
+            // Derive candidate name from resume filenames and content
+            const entries = Object.entries(appState.fileContents || {});
+            const nameCandidates = [];
+
+            // From filenames
+            for (const [fname] of entries) {
+                if (!/resume|cv/i.test(fname)) continue;
+                const base = String(fname || '').split(/[\\\/]/).pop().replace(/\.[^.]+$/, '');
+                const cleaned = base.replace(/resume|cv/ig, ' ').replace(/[_]+/g, ' ').replace(/\s+/g, ' ').trim();
+                const m = cleaned.match(/([A-Z][a-z'’.\-]+(?:\s+[A-Z][a-z'’.\-]+){1,3})/);
+                if (m) nameCandidates.push(m[1].trim());
+            }
+
+            // From resume text (first lines)
+            const resumeText = entries.filter(([n]) => /resume|cv/i.test(n)).map(([,c]) => c || '').join('\n');
+            if (resumeText) {
+                const lines = resumeText.split(/\r?\n/).map(s => s.trim()).filter(Boolean).slice(0, 40);
+                for (const ln of lines) {
+                    if (/summary|experience|education|skills|linkedin|github|email|phone|address|profile|portfolio/i.test(ln)) continue;
+                    const s = ln.replace(/^\s*[•–\-*·]+\s*/, '');
+                    const m = s.match(/^([A-Z][A-Za-z'’.\-]+(?:\s+[A-Z][A-Za-z'’.\-]+){1,3})$/);
+                    if (m && m[1].length <= 60) { nameCandidates.push(m[1].trim()); break; }
+                }
+            }
+
+            if (nameCandidates.length) {
+                // Choose the candidate with the most tokens
+                nameCandidates.sort((a, b) => b.split(/\s+/).length - a.split(/\s+/).length);
+                appState.extractedData.candidateName = nameCandidates[0];
+            }
+        }
+
+        function normalizeNameForCompare(name) {
+            return String(name || '').toLowerCase().replace(/[^a-z\s]/g, ' ').replace(/\s+/g, ' ').trim();
+        }
+
+        function removeCandidateFromList(panelists) {
+            const cand = normalizeNameForCompare(appState?.extractedData?.candidateName || '');
+            if (!cand) return panelists || [];
+            const filtered = (panelists || []).filter(p => {
+                const n = normalizeNameForCompare(p?.name || '');
+                if (!n) return false;
+                // exact or contains full candidate name
+                if (n === cand) return false;
+                if (n.includes(cand)) return false;
+                return true;
+            });
+            return filtered;
+        }
+
+        function ensureCandidateNotListedAsPanelist() {
+            if (!Array.isArray(appState.extractedData.panelists)) return;
+            appState.extractedData.panelists = removeCandidateFromList(appState.extractedData.panelists);
+        }
+
+        function pickFromFilenameCompany(files) {
+            try {
+                const { company } = inferCompanyAndRoleFromFilenames(files || []);
+                return company || '';
+            } catch (e) { return ''; }
+        }
+
+        function cleanCompanyDisplayName(name) {
+            if (!name) return '';
+            let s = String(name).trim();
+            // Strip obvious URL or extension noise
+            s = s.replace(/https?:\/\/\S+/gi, '')
+                 .replace(/\.html?\b.*$/i, '')
+                 .replace(/\.pdf\b.*$/i, '')
+                 .replace(/\.docx?\b.*$/i, '')
+                 .replace(/\s*\|.*$/, '');
+            // Normalize separators
+            s = s.replace(/\s*[-_/|]+\s*/g, ' ').replace(/\s+/g, ' ').trim();
+            // Cut at the first parenthesis (e.g., "(ICT)") and anything after
+            s = s.replace(/\s*\(.*/, '').trim();
+            // Remove common stopwords if they make up the whole result
+            const stop = /^(of|the|and|for|with|in|at|on|to|a|an)$/i;
+            if (stop.test(s)) s = '';
+            // If still very long, try to pick a likely company-like segment from common delimiters
+            if (s.length > 60 || s.length < 3) {
+                const raw = String(name);
+                const parts = raw.split(/\s*[|–—-]+\s*/).map(p=>p.trim()).filter(Boolean);
+                const bad = /\b(of|the|and|for|with|in|at|on|to|a|an)\b|announc|public|launch|interview|resume|questions|playbook|brief|analysis|mapping|stories|battle|plan|bank|final|round|panel|date|metrics|csv|pdf|docx|html|md/i;
+                const candidates = parts.filter(p => !bad.test(p) && /[A-Za-z]/.test(p) && p.length <= 45);
+                if (candidates.length) s = candidates[0];
+            }
+            // Cut before verbs like "is/are/provides" that indicate sentence continuation
+            s = s.split(/\s+(?:is|are|provides|provide|was|were)\b/i)[0].trim();
+            // De-duplicate repeated starting phrase (e.g., "Acme Corp Acme Corp ...")
+            const tokens = s.split(/\s+/);
+            for (let k = 2; k <= 4 && 2*k <= tokens.length; k++) {
+                const a = tokens.slice(0,k).join(' ').toLowerCase();
+                const b = tokens.slice(k,2*k).join(' ').toLowerCase();
+                if (a && a === b) { s = tokens.slice(0,k).concat(tokens.slice(2*k)).join(' '); break; }
+            }
+            // If the result is very long, clamp to first 6 words (most company names fit)
+            if (s.split(/\s+/).length > 6) {
+                s = s.split(/\s+/).slice(0,6).join(' ');
+            }
+            // Title-case words but preserve acronyms
+            s = s.split(' ').map(w => (/^[A-Z0-9]{2,}$/.test(w) ? w : (w.charAt(0).toUpperCase()+w.slice(1).toLowerCase()))).join(' ');
+            if (s.length < 3) {
+                // Fallback to text-derived label if available
+                try {
+                    const fromText = inferCompanyAndRoleFromText(getCombinedContent()).company;
+                    if (fromText && fromText.length > 2) {
+                        return fromText.trim();
+                    }
+                } catch (e) { /* ignore */ }
+            }
+            return s.trim();
         }
 
         function updateDashboard() {
@@ -1200,11 +1952,9 @@ GROUP BY previous_tier, current_tier;`;
             
             // Update header
             const titleElement = document.getElementById('dashboardTitle');
-            if (data.company && data.role) {
-                titleElement.textContent = `${data.company} | ${data.role} Interview Prep`;
-            } else {
-                titleElement.textContent = 'Master Interview Prep Dashboard';
-            }
+            const files = Object.keys(appState.fileContents || {});
+            const preferredCompany = cleanCompanyDisplayName(data.company || pickFromFilenameCompany(files));
+            titleElement.textContent = preferredCompany || 'Master Interview Prep Dashboard';
             
             // Update all sections
             updateCommandCenter();
@@ -1248,7 +1998,21 @@ GROUP BY previous_tier, current_tier;`;
                     if (s.length > 20) return false;
                     return /^(\$?\d[\d,.]*)([MBK]\+?)?$/.test(s) || /^(\d+%|\d+\+?)$/.test(s);
                 };
-                const metricsToShow = (Array.isArray(data.metrics) ? data.metrics : []).filter(m => m && m.label && isValidValue(m.value));
+                // Start with validated numeric/currency/percent metrics
+                let metricsToShow = (Array.isArray(data.metrics) ? data.metrics : []).filter(m => m && m.label && isValidValue(m.value));
+                // Merge in tiles derived from strengths (resume/context) to enrich the view
+                const strengthTiles = buildTilesFromStrengths(data.strengths || []);
+                const combined = [];
+                const seen = new Set();
+                const pushIfNew = (t) => {
+                    if (!t || !t.label || !t.value) return;
+                    const key = (String(t.label)+'|'+String(t.value)).toLowerCase();
+                    if (seen.has(key)) return;
+                    combined.push(t); seen.add(key);
+                };
+                metricsToShow.forEach(pushIfNew);
+                strengthTiles.forEach(t => { if (combined.length < 8) pushIfNew(t); });
+                metricsToShow = combined;
                 if (!metricsToShow.length) {
                     metricsContainer.innerHTML = '<p style="color:#64748b;">No metrics available. Upload files to populate metrics.</p>';
                 } else {
@@ -1286,6 +2050,54 @@ GROUP BY previous_tier, current_tier;`;
                     `<div class="gap-item">→ ${gap}</div>`
                 ).join('');
             }
+        }
+
+        // Build Command Center tiles from strengths when metrics CSV not provided
+        function buildTilesFromStrengths(strengths) {
+            const tiles = [];
+            const add = (label, value, growth = '', context = '') => {
+                if (!value || !label) return;
+                tiles.push({ label, value, growth, context });
+            };
+            const uniq = new Set();
+            (strengths || []).forEach(s => {
+                if (!s || typeof s !== 'string') return;
+                const t = s.trim();
+                // 80% automation / effort reduction / efficiency
+                let m = t.match(/(\d{1,3})%\s*(?:manual|effort|reduction|automation|efficiency)/i);
+                if (m && !uniq.has('automation')) { add('Automation', `${m[1]}%`, 'Efficiency Gain'); uniq.add('automation'); }
+                // 95% query optimization / performance
+                m = t.match(/(\d{1,3})%\s*(?:query|performance|optimization|speed)/i);
+                if (m && !uniq.has('query')) { add('Query Speed', `${m[1]}%`, 'Faster'); uniq.add('query'); }
+                // 30% adoption increase
+                m = t.match(/(\d{1,3})%\s*(?:dashboard\s*)?adoption/i);
+                if (m && !uniq.has('adoption')) { add('Dashboard Adoption', `${m[1]}%`, 'Increase'); uniq.add('adoption'); }
+                // $M impact
+                m = t.match(/\$(\d+(?:\.\d+)?)\s*M/i);
+                if (m && !uniq.has('impact')) { add('Business Impact', `$${m[1]}M`, 'Outcome'); uniq.add('impact'); }
+                // 100M+ daily records
+                m = t.match(/(\d+M\+)\s*(?:daily\s*)?(?:records|transactions|rows)/i);
+                if (m && !uniq.has('daily')) { add('Daily Processing', m[1], 'Records'); uniq.add('daily'); }
+                // 500M+ records scale
+                m = t.match(/(\d+M\+|\d+\.\d+M\+)\s*(?:SKU|records)/i);
+                if (m && !uniq.has('scale')) { add('Your Scale', m[1], 'Records'); uniq.add('scale'); }
+                // Stakeholders / sessions counts
+                m = t.match(/(\d{2,4}\+)\s*(stakeholders|users|people)/i);
+                if (m && !uniq.has('stakeholders')) { add('Stakeholders', m[1], 'Trained/Served'); uniq.add('stakeholders'); }
+                m = t.match(/(\d{2,4}\+)\s*(?:training|sessions?)/i);
+                if (m && !uniq.has('sessions')) { add('Sessions', m[1], 'Delivered'); uniq.add('sessions'); }
+                // Tech keyword tiles for aesthetics/coverage
+                if (/\bpython\b/i.test(t) && !uniq.has('python')) { add('Language', 'Python'); uniq.add('python'); }
+                if (/bigquery|snowflake/i.test(t) && !uniq.has('cloud_dw')) { add('Cloud DW', 'BigQuery/Snowflake'); uniq.add('cloud_dw'); }
+                if (/tableau|looker|power\s*bi/i.test(t) && !uniq.has('bi')) { add('BI Tools', 'Tableau/Looker/Power BI'); uniq.add('bi'); }
+                if (/(A\/B|experiment|causal)/i.test(t) && !uniq.has('ab')) { add('Experimentation', 'A/B Testing'); uniq.add('ab'); }
+                if (/etl|elt|pipeline/i.test(t) && !uniq.has('etl')) { add('Pipelines', 'ETL/ELT'); uniq.add('etl'); }
+                if (/cross[-\s]?functional|stakeholder/i.test(t) && !uniq.has('xf')) { add('Collaboration', 'Cross-functional'); uniq.add('xf'); }
+                if (/executive|c-?suite/i.test(t) && !uniq.has('exec')) { add('Communication', 'Executive'); uniq.add('exec'); }
+                if (/lean\s*six\s*sigma/i.test(t) && !uniq.has('lss')) { add('Process', 'Lean Six Sigma'); uniq.add('lss'); }
+            });
+            // Keep up to 8 tiles for variety
+            return tiles.slice(0, 8);
         }
 
         function updateCompanyIntel() {
@@ -1509,7 +2321,9 @@ GROUP BY previous_tier, current_tier;`;
 
         function updatePanelStrategy() {
             const container = document.getElementById('panelistsContainer');
-            if (!container || appState.extractedData.panelists.length === 0) return;
+            if (!container) return;
+            const list = (appState.extractedData.panelists || []).filter(p => p && p.name);
+            if (list.length === 0) { container.innerHTML = ''; if (window.__DEBUG__) try{renderPanelistDebug();}catch(e){} return; }
             
             const archetypeColors = {
                 'Champion': 'panel-champion',
@@ -1548,11 +2362,18 @@ GROUP BY previous_tier, current_tier;`;
                 }
             };
 
-            container.innerHTML = appState.extractedData.panelists.map(p => `
+            container.innerHTML = list.map(p => `
                 <div class="panel-card ${archetypeColors[p.archetype] || 'panel-ally'}">
                     <div class="archetype-badge" style="${archetypeBadgeColors[p.archetype] || ''}">${p.archetype}</div>
                     <h3 style="font-weight: 600; font-size: 1.125rem; margin-bottom: 0.25rem;">${p.name}</h3>
-                    <p style="color: #64748b; font-size: 0.875rem; margin-bottom: 1rem;">${p.role}</p>
+                    <p style="color: #64748b; font-size: 0.875rem; margin-bottom: 0.5rem;">${p.role || ''}</p>
+                    ${(() => {
+                        const link = (p.linkedin || p.website || p.link || p.url || '').trim();
+                        if (!link) return '';
+                        const safe = link.replace(/"/g, '&quot;');
+                        const label = safe.replace(/^https?:\/\//, '');
+                        return `<div style="margin-bottom: 0.75rem;"><a href="${safe}" target="_blank" rel="noopener noreferrer" style="color:#2563eb; font-size:0.85rem; text-decoration:underline;">${label}</a></div>`;
+                    })()}
                     <div style="font-size: 0.875rem; margin-bottom: 0.5rem;">
                         <strong>Motivation:</strong> ${p.motivation || defaults.motivation[p.archetype] || ''}
                     </div>
@@ -1565,13 +2386,14 @@ GROUP BY previous_tier, current_tier;`;
                             ${p.talkingPoints.map(tp => `<li>${tp}</li>`).join('')}
                         </ul>
                     </div>` : ''}
-                    <button class="btn btn-primary" style="width: 100%;" data-action="gen-panelist-question" data-name="${p.name.replace(/'/g, "&apos;")}">
+                    <button class="btn btn-primary btn-bottom" style="width: 100%;" data-action="gen-panelist-question" data-name="${p.name.replace(/'/g, "&apos;")}">
                         <span>✨</span> Generate a question
                         <span class="ai-badge">AI</span>
                     </button>
                     <div id="question-${p.name.replace(/\s/g, '-')}" style="margin-top: 1rem;"></div>
                 </div>
             `).join('');
+            if (window.__DEBUG__) try{renderPanelistDebug();}catch(e){}
         }
 
         function updateQuestionBank() {
@@ -1613,9 +2435,9 @@ GROUP BY previous_tier, current_tier;`;
             const cat = (q.category || 'general').toLowerCase();
             const strengths = appState?.extractedData?.strengths || [];
             const metrics = appState?.extractedData?.metrics || [];
-            const company = appState?.extractedData?.company || 'Google Play';
+            const company = appState?.extractedData?.company || 'the company';
             const story = pickStoryForCategory(cat);
-            const metricTile = (metrics[0] && metrics[0].value) ? `${metrics[0].value} ${metrics[0].label}` : '220M+ Play Points members';
+            const metricTile = (metrics[0] && metrics[0].value) ? `${metrics[0].value} ${metrics[0].label}` : 'key business metrics';
 
             if (cat.includes('tech')) {
                 return `
@@ -1658,6 +2480,54 @@ GROUP BY previous_tier, current_tier;`;
                         <li>Roll out iteratively; measure impact and adjust.</li>
                     </ul>
                 </div>`;
+        }
+
+        // -------- Test Loader (input_files_test) --------
+        async function loadTestFilesFromFolder() {
+            try {
+                showToast('Loading test files...', 'info');
+                const res = await fetch('input_files_test/manifest.json', { cache: 'no-cache' });
+                if (!res.ok) {
+                    showToast('Test manifest not found', 'error');
+                    return;
+                }
+                const manifest = await res.json();
+                if (!Array.isArray(manifest) || manifest.length === 0) {
+                    showToast('No files listed in test manifest', 'warning');
+                    return;
+                }
+                const files = [];
+                for (const relPath of manifest) {
+                    try {
+                        const url = relPath;
+                        const ext = url.split('.').pop().toLowerCase();
+                        const typeMap = {
+                            pdf: 'application/pdf',
+                            docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+                            csv: 'text/csv',
+                            md: 'text/markdown',
+                            txt: 'text/plain',
+                            json: 'application/json'
+                        };
+                        const r = await fetch(url);
+                        if (!r.ok) continue;
+                        const blob = await r.blob();
+                        const file = new File([blob], url.split('/').pop(), { type: typeMap[ext] || blob.type || 'application/octet-stream' });
+                        files.push(file);
+                    } catch (e) { /* skip file */ }
+                }
+                if (!files.length) {
+                    showToast('No test files could be loaded', 'warning');
+                    return;
+                }
+                // Display and set as selected
+                handleFiles(files);
+                // Auto-process
+                setTimeout(() => processFiles(), 50);
+            } catch (e) {
+                console.error('Failed to load test files', e);
+                showToast('Failed to load test files', 'error');
+            }
         }
 
         function questionMeta(q) {
@@ -2327,46 +3197,16 @@ GROUP BY previous_tier, current_tier;`;
             }
         }
 
-        // Function to load STAR stories from input documents (.md/.docx/.pdf)
+        // Function to load STAR stories from uploaded documents (.md/.docx/.pdf)
         async function loadSTARStoriesFromDocuments() {
-            console.log('🔍 Loading STAR stories from Interview Playbook...');
-            const stories = [];
-            
             try {
-                // Try to load from the Interview Playbook markdown file first
-                const res = await fetch('input_files/Google - Interview Playbook.md');
-                if (res.ok) {
-                    const text = await res.text();
-                    const extractedStories = extractSTARStoriesFromPlaybook(text);
-                    stories.push(...extractedStories);
-                    console.log(`✅ Extracted ${extractedStories.length} stories from Interview Playbook`);
-                }
+                const combined = Object.values(appState.fileContents || {}).join('\n');
+                const found = extractSTARStoriesFromText(combined);
+                return found.slice(0, 12);
             } catch (e) {
-                console.log('⚠️ Could not load Interview Playbook:', e);
+                console.log('⚠️ STAR extraction failed:', e);
+                return [];
             }
-            
-            // Fallback to other files if needed
-            if (stories.length === 0) {
-                console.log('🔍 Trying alternative STAR story sources...');
-                try {
-                    const { text } = await fetchTextForCandidates([
-                        'input_files/Google - Strategic Synthesis + STAR + Experience Mapping.md',
-                        'input_files/Google - Strategic Synthesis + STAR + Experience Mapping.docx',
-                        'input_files/Google - Strategic Synthesis + STAR + Experience Mapping.pdf',
-                        'input_files/Google - Interview Playbook.md',
-                        'input_files/Google - Interview Playbook.docx',
-                        'input_files/Google - Interview Playbook.pdf'
-                    ]);
-                    if (text) {
-                        const found = extractSTARStoriesFromText(text);
-                        stories.push(...found);
-                    }
-                } catch (e) {
-                    console.log('⚠️ Could not load from alternative sources:', e);
-                }
-            }
-            
-            return stories.slice(0, 10); // Increased limit to capture more stories
         }
 
         function extractSTARStoriesFromPlaybook(content) {
@@ -2788,39 +3628,17 @@ GROUP BY previous_tier, current_tier;`;
             }
         }
         
-        // Extract STAR stories from documents
+        // Extract STAR stories from documents (only from uploaded materials)
         function extractSTARStories(content) {
             const stories = extractSTARStoriesFromText(content);
-            
-            // Also look for specific story patterns in Interview Playbook
-            const starPatterns = [
-                /Customer Segmentation[^#]*/i,
-                /BigQuery Pipeline[^#]*/i,
-                /Dashboard Adoption[^#]*/i,
-                /Lean Six Sigma[^#]*/i
-            ];
-            
-            starPatterns.forEach(pattern => {
-                const match = content.match(pattern);
-                if (match && !stories.some(s => s.title.includes(match[0].substring(0, 20)))) {
-                    const storyText = match[0];
-                    const story = {
-                        title: extractTitle(storyText),
-                        situation: extractBetween(storyText, 'Situation:', 'Task:') || '',
-                        task: extractBetween(storyText, 'Task:', 'Action:') || '',
-                        action: extractBetween(storyText, 'Action:', 'Result:') || '',
-                        result: extractBetween(storyText, 'Result:', '\n\n') || '',
-                        metric: extractMetric(storyText),
-                        fromDocument: true
-                    };
-                    if (story.situation || story.task || story.action || story.result) {
-                        stories.push(story);
-                    }
-                }
-            });
-            
             if (stories.length > 0) {
-                appState.extractedData.stories = stories;
+                const seen = new Set();
+                const uniq = [];
+                for (const s of stories) {
+                    const key = ((s.situation||'').slice(0,120) + '|' + (s.result||'').slice(0,120)).toLowerCase();
+                    if (!seen.has(key)) { seen.add(key); uniq.push(s); }
+                }
+                appState.extractedData.stories = uniq.slice(0, 12);
             }
         }
         
@@ -3226,128 +4044,64 @@ GROUP BY previous_tier, current_tier;`;
         
         function extractSTARStoriesFromText(text) {
             const items = [];
-            
-            // Enhanced STAR stories with optimized narratives from Interview Playbook
-            const enhancedStories = [
-                {
-                    title: 'Customer Segmentation Driving Play Points-Scale Impact',
-                    situation: 'At Trulieve, a $1.2B cannabis operator, we faced 15% quarterly customer churn with no understanding of customer segments. Generic marketing campaigns were costing $2M monthly with declining ROI.',
-                    task: 'Lead development of ML-powered customer segmentation to enable targeted retention strategies across 100M+ transaction records, directly impacting quarterly earnings.',
-                    action: 'Architected Python pipeline processing 100M+ daily records using K-Means and Hierarchical Clustering. Built automated ETL with SAP HANA and AWS, eliminating 10+ hours weekly manual work. Created 7 distinct customer personas mapped to 120+ store locations. Designed Power BI dashboards with real-time segment tracking. Presented findings to C-suite with actionable recommendations.',
-                    result: '12% quarterly improvement in customer acquisition/retention ($43M annual impact), 20% reduction in inventory waste ($8M saved), ROI: 2100% on analytics investment.',
-                    learning: 'Learned that behavioral segmentation outperforms demographic segmentation 3:1 in loyalty programs.',
-                    googlePlayApplication: 'This directly parallels optimizing Play Points\' 220M+ members across 5 tiers, where I\'d use BigQuery ML to identify progression patterns and design targeted interventions for Gold-to-Platinum conversion.',
-                    industryTranslation: 'In the Google Play context, this approach would segment Play Points members by earning velocity, redemption patterns, and tier progression risk - using BigQuery\'s clustering capabilities to process billions of transactions efficiently.',
-                    metric: '$43M',
-                    category: 'technical',
-                    duration: '2-minute',
-                    versions: {
-                        '60-second': 'At Trulieve, I transformed customer retention by building ML segmentation across 100M+ records. Created automated Python pipelines with K-Means clustering, identifying 7 personas that drove targeted strategies. Results: 12% retention improvement worth $43M annually, 20% inventory waste reduction. For Play Points\' 220M members, I\'d apply similar BigQuery ML techniques to optimize tier progression.',
-                        '30-second': 'Built ML customer segmentation processing 100M+ daily records at Trulieve, improving retention 12% ($43M impact). Would apply same approach to Play Points\' tier optimization using BigQuery ML.',
-                        'hook': 'When Trulieve needed to improve customer retention across 120+ dispensaries with $1.2B annual revenue at stake, we had zero ML infrastructure and declining engagement metrics threatening our market position...'
-                    },
-                    interviewerNotes: {
-                        nikki: 'Lead with business impact, emphasize collaboration and stakeholder management, show creative problem-solving process, reference cross-functional success',
-                        brian: 'Include technical specifics (SQL, BigQuery, Python), demonstrate scale experience (millions/billions of records), show optimization techniques, reference performance improvements'
-                    },
-                    stakes: {
-                        financial: '$180M potential revenue loss from churn',
-                        operational: '120+ locations with inconsistent customer experiences', 
-                        strategic: 'Critical for maintaining #1 market position in Florida'
-                    },
-                    fromDocument: true
-                },
-                {
-                    title: 'BigQuery Pipeline at Google-Scale',
-                    situation: 'Home Depot\'s supply chain team manually tracked 500M+ SKU records across 2,000+ stores, causing 48-hour reporting delays and 8% mis-ship rates.',
-                    task: 'Design and implement BigQuery-based ETL pipeline to enable real-time inventory visibility, directly supporting $50B annual revenue operations.',
-                    action: 'Architected BigQuery tables with date partitioning and clustering by store_id/sku. Wrote optimized SQL with CTEs and window functions for inventory flow analysis. Reduced query time from 10 minutes to 30 seconds using materialized views. Built Tableau dashboards connected to BigQuery for real-time monitoring. Trained 50+ stakeholders, achieving 30% adoption increase.',
-                    result: '80% reduction in manual effort (520 hours annually saved), 25% decrease in mis-ships ($12.5M recovered), ROI: 1,250% in first year.',
-                    googlePlayApplication: 'This BigQuery expertise directly applies to processing Play Store\'s billions of daily transactions, where I\'d implement similar optimization strategies for Play Points analytics.',
-                    metric: '1,250%',
-                    category: 'technical',
-                    duration: '2-minute',
-                    versions: {
-                        'hook': 'Despite Home Depot processing 500M+ SKU records monthly with zero BigQuery expertise on the team, supply chain errors were costing $15M quarterly...',
-                        'technical-example': 'CREATE TABLE play_points_fact\nPARTITION BY DATE(transaction_date)\nCLUSTER BY member_id, tier_level AS\nSELECT \n  member_id,\n  SUM(points) OVER (PARTITION BY member_id \n    ORDER BY transaction_date \n    ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) as cumulative_points\nFROM transactions;'
-                    },
-                    interviewerNotes: {
-                        nikki: 'Include details about the 50+ training sessions and cross-functional adoption',
-                        brian: 'Focus on technical SQL examples, BigQuery optimization techniques, partitioning and clustering strategies'
-                    },
-                    fromDocument: true
-                },
-                {
-                    title: 'Crisis Response - Metric Investigation',
-                    situation: 'At Home Depot, finance and supply chain defined \'inventory turnover\' differently, causing 40% metric variance in executive dashboards.',
-                    task: 'Align stakeholders on unified metrics within 2 weeks before quarterly board meeting.',
-                    action: 'Facilitated 5 discovery sessions with both teams. Documented calculation methodologies in shared wiki. Created compromise: primary metric with team-specific drill-downs. Built consensus through data simulations showing impact.',
-                    result: 'Achieved alignment in 10 days (30% faster than deadline), 30% dashboard adoption increase, prevented $8M bonus dispute.',
-                    googlePlayApplication: 'Critical for aligning Product, Engineering, and Marketing teams on Play Points KPIs.',
-                    metric: '$8M',
-                    category: 'behavioral',
-                    duration: '90-second',
-                    versions: {
-                        'hook': 'When a critical inventory metric showed 40% variance threatening $8M in quarterly bonuses and supplier relationships...'
-                    },
-                    interviewerNotes: {
-                        nikki: 'Apply DACI framework: Driver (identify decision owner), Approver (get executive sponsor), Contributors (include all affected teams), Informed (broader stakeholder communication). Applied this at Home Depot to resolve the inventory metric dispute in 10 days.',
-                        brian: 'Focus on technical methodology for metric reconciliation and process improvements'
-                    },
-                    fromDocument: true
-                },
-                {
-                    title: 'Gold-to-Platinum Tier Progression Optimization',
-                    situation: 'Gold members (600-2,999 points) show 65% drop-off before Platinum (3,000+ points)',
-                    task: 'Increase Gold→Platinum conversion by 20% in 6 months',
-                    action: 'Week 1-2: Diagnostic analysis using progression_analysis CTE with median velocity, inactivity tracking, days to promotion calculations. Week 3-4: Intervention design identifying 70-85% progress members, personalized bonus events, A/B test threshold adjustments. Month 2-6: Implementation via BigQuery ML predictions, weekly cohort tracking, engagement iteration.',
-                    result: 'Expected: 20% increase in Platinum members (44,000 additional), $3-4M additional revenue from increased engagement, framework scalable to all tier transitions.',
-                    googlePlayApplication: 'Based on my Trulieve segmentation improving retention 12%, I\'d tackle Play Points progression through targeted behavioral analysis and intervention campaigns.',
-                    metric: '$3-4M',
-                    category: 'strategic',
-                    duration: '2-minute',
-                    sqlExample: 'WITH progression_analysis AS (\n  SELECT \n    member_id,\n    tier_level,\n    PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY daily_points) as median_velocity,\n    DATE_DIFF(CURRENT_DATE(), last_activity, DAY) as days_inactive,\n    points_to_next_tier / NULLIF(avg_daily_points, 0) as days_to_promotion\n  FROM member_activity\n  WHERE tier_level = \'Gold\'\n)',
-                    interviewerNotes: {
-                        nikki: 'Emphasize business impact and strategic approach to member engagement',
-                        brian: 'Include technical BigQuery implementation and optimization techniques'
-                    },
-                    fromDocument: true
-                }
-            ];
-            
-            // Add enhanced stories to items
-            items.push(...enhancedStories);
-            
-            // Try original extraction as fallback
-            const blocks = text.split(/\b(?:STAR\s*#?\d*:?|Story\s*#?\d*:?|Situation\s*:)\b/i);
-            for (let i = 1; i < blocks.length && items.length < 8; i++) {
-                const blk = blocks[i];
-                const s = extractBetween(blk, 'Situation:', 'Task:') || 
-                         extractBetween(blk, '', 'Task:') || '';
-                const t = extractBetween(blk, 'Task:', 'Action:') || '';
-                const a = extractBetween(blk, 'Action:', 'Result:') || '';
-                const r = extractBetween(blk, 'Result:', 'Learning:') || 
-                         extractBetween(blk, 'Result:', '\n\n') || '';
-                         
-                if (s && t && a && r && s.length > 20) {
-                    const newStory = {
-                        title: extractTitle(blk) || `STAR Story ${items.length + 1}`,
-                        problem: '',
-                        metric: extractMetric(r),
-                        situation: s.substring(0, 300),
-                        task: t.substring(0, 200),
-                        action: a.substring(0, 400),
-                        result: r.substring(0, 300),
+            if (!text) return items;
+            const lines = String(text).split(/\r?\n/);
+            let buf = { title: '', situation: '', task: '', action: '', result: '' };
+            let current = '';
+            function flush() {
+                const has = (v) => v && v.trim().length > 0;
+                if ((has(buf.situation)||has(buf.task)||has(buf.action)) && has(buf.result)) {
+                    const title = buf.title || (buf.result.split(/[.!?]/)[0] || buf.situation.split(/[.!?]/)[0] || 'STAR Story');
+                    items.push({
+                        title: title.substring(0,100),
+                        situation: (buf.situation||'').trim(),
+                        task: (buf.task||'').trim(),
+                        action: (buf.action||'').trim(),
+                        result: (buf.result||'').trim(),
+                        metric: extractMetric((buf.result||'')) || extractMetric((buf.situation||'')) || '',
                         fromDocument: true
-                    };
-                    
-                    // Only add if not duplicate
-                    if (!items.some(existing => existing.title === newStory.title)) {
-                        items.push(newStory);
+                    });
+                }
+                buf = { title: '', situation: '', task: '', action: '', result: '' };
+                current = '';
+            }
+            for (let i=0;i<lines.length;i++) {
+                const line = (lines[i]||'').trim();
+                if (!line) continue;
+                const m = line.match(/^(?:\*\*\s*)?(situation|task|action|result|s|t|a|r)\b[^:]*:\s*(.*)$/i);
+                if (m) {
+                    const label = m[1].toLowerCase()[0];
+                    const val = m[2]||'';
+                    if (label==='s') { if (current && current!=='s') flush(); current='s'; buf.situation += (buf.situation?' ':'')+val; }
+                    else if (label==='t') { current='t'; buf.task += (buf.task?' ':'')+val; }
+                    else if (label==='a') { current='a'; buf.action += (buf.action?' ':'')+val; }
+                    else if (label==='r') { current='r'; buf.result += (buf.result?' ':'')+val; }
+                } else if (current) {
+                    if (current==='s') buf.situation += ' '+line;
+                    else if (current==='t') buf.task += ' '+line;
+                    else if (current==='a') buf.action += ' '+line;
+                    else if (current==='r') buf.result += ' '+line;
+                } else {
+                    if (!buf.title && /^[A-Z][A-Za-z0-9 \-]{4,60}$/.test(line) && !/:$/.test(line)) {
+                        buf.title = line;
                     }
                 }
             }
-            
+            flush();
+            // Also parse compact single-line "S:.. T:.. A:.. R:.." blocks
+            const compactRe = /S\s*:\s*([^TAR\n]+)\s*T\s*:\s*([^AR\n]+)\s*A\s*:\s*([^R\n]+)\s*R\s*:\s*([^\n]+)/gi;
+            let mm;
+            while ((mm = compactRe.exec(text)) !== null) {
+                items.push({
+                    title: (mm[1].split(/[.!?]/)[0] || 'STAR Story').substring(0,100),
+                    situation: mm[1].trim(),
+                    task: mm[2].trim(),
+                    action: mm[3].trim(),
+                    result: mm[4].trim(),
+                    metric: extractMetric(mm[4]) || extractMetric(mm[1]) || '',
+                    fromDocument: true
+                });
+            }
             return items;
         }
 
@@ -3365,105 +4119,62 @@ GROUP BY previous_tier, current_tier;`;
         // Function to generate AI-powered questions for panelists based on all input files
         async function generateAIPanelistQuestions(panelistName, panelistRole, panelistArchetype) {
             console.log(`🎯 Generating tailored questions for ${panelistName} (${panelistArchetype})`);
-            
-            // First try to get questions from the loaded Q&A bank based on "Likely Asker" assignments
             let questions = [];
-            
-            // Access the current app state to get loaded questions
-            if (window.appState && window.appState.extractedData && window.appState.extractedData.questions && window.appState.extractedData.questions.length > 0) {
-                // Filter questions by likely asker matching the panelist name
-                const panelistQuestions = window.appState.extractedData.questions.filter(q => 
-                    q.likelyAsker && q.likelyAsker.toLowerCase().includes(panelistName.toLowerCase())
+
+            // Prefer questions tagged to this panelist in uploaded Q&A
+            const bank = (window.appState?.extractedData?.questions) || [];
+            if (bank.length) {
+                const byAsker = bank.filter(q => q.likelyAsker && q.likelyAsker.toLowerCase().includes(String(panelistName).toLowerCase()));
+                if (byAsker.length) return byAsker.map(q => q.question);
+            }
+
+            // Role/Archetype heuristics (company‑agnostic)
+            const r = String(panelistRole||'').toLowerCase();
+            const isExec = /(cio|cto|cfo|chief|vp|director|head)/.test(r);
+            const isMgr = /(manager|lead|program|product)/.test(r);
+            const isTech = /(architect|engineer|developer|scientist|analyst|bi|power\s*bi|data)/.test(r);
+            const isRecruiter = /(recruiter|talent|hr)/.test(r);
+
+            if (isExec) {
+                questions.push(
+                    'What metrics would most influence your decision‑making in this role?',
+                    'Where do you see the biggest opportunity for impact in the next 6–12 months?',
+                    'How do you balance speed with quality for high‑visibility initiatives?'
                 );
-                
-                if (panelistQuestions.length > 0) {
-                    questions = panelistQuestions.map(q => q.question);
-                    console.log(`📋 Found ${questions.length} specific questions assigned to ${panelistName} from Q&A Bank`);
-                    return questions;
-                } else {
-                    console.log(`⚠️ No specific questions found for ${panelistName} in Q&A Bank, using fallback questions`);
-                }
             }
-            
-            // Fallback to curated questions if no Q&A bank questions found
-            
-            if (panelistName === 'Nikki Diman') {
-                questions = [
-                    'Tell me about a time you had to extract insights from minimal or messy data to solve a business problem.',
-                    'Describe a situation where you managed conflicting stakeholder requirements across different teams.',
-                    'How would you approach investigating a sudden 15% spike in Play Points member churn?',
-                    'Walk me through how you would present complex BigQuery analysis findings to non-technical executives.',
-                    'Give me an example of when you had to be creative in your problem-solving approach due to data limitations.'
-                ];
-            } else if (panelistName === 'Brian Mauch') {
-                questions = [
-                    'How would you optimize a BigQuery query that processes billions of Play Store transactions daily?',
-                    'Describe your experience with large-scale data architecture and pipeline design.',
-                    'Walk me through your approach to ensuring data quality in high-volume ETL processes.',
-                    'What strategies would you use to reduce query costs while maintaining performance at Google scale?',
-                    'Tell me about a time you had to troubleshoot performance issues in a data warehouse environment.'
-                ];
-            } else if (panelistName === 'Jolly Jayaprakash') {
-                questions = [
-                    'Are you available to start immediately and work Pacific Time hours when needed?',
-                    'How do you prioritize your work when supporting multiple stakeholders with urgent requests?',
-                    'What excites you most about working on Google Play Points analytics at this scale?',
-                    'Describe your experience working in fast-paced, collaborative environments.',
-                    'How do you ensure clear communication when working with distributed teams?'
-                ];
-            } else {
-                // Fallback based on archetype
-                switch (panelistArchetype) {
-                    case 'Gatekeeper':
-                        questions = [
-                            'Tell me about a time you influenced stakeholders without formal authority.',
-                            'How do you handle ambiguous requirements from multiple teams?',
-                            'Describe your approach to stakeholder management in cross-functional projects.'
-                        ];
-                        break;
-                    case 'Technical Validator':
-                        questions = [
-                        `Walk me through your approach to statistical analysis in A/B testing.`,
-                        `How do you validate data models and ensure statistical rigor?`,
-                        `Describe a complex data problem you solved using advanced analytics.`
-                        ];
-                        break;
-                case 'Ally':
-                    questions = [
-                        `How do you handle ambiguity in project requirements?`,
-                        `Tell me about a time you had to learn a new technology quickly.`,
-                        `What motivates you to work in data analytics?`
-                    ];
-                    break;
-                case 'Skeptic':
-                    questions = [
-                        `What are the biggest challenges you see in data analytics?`,
-                        `How do you ensure your analysis is robust and defensible?`,
-                        `Tell me about a time your analysis was challenged and how you responded.`
-                    ];
-                    break;
-                case 'Gatekeeper':
-                    questions = [
-                        `How do you prioritize multiple competing data requests?`,
-                        `What criteria do you use to evaluate data quality?`,
-                        `Describe your process for ensuring compliance and governance.`
-                    ];
-                    break;
-                default:
-                    questions = [
-                        `Tell me about your experience with ${panelistRole}.`,
-                        `What are the key challenges in this role?`,
-                        `How do you measure success in data analytics?`
-                    ];
-                }
+            if (isMgr) {
+                questions.push(
+                    'How do you prioritize trade‑offs across competing stakeholders?',
+                    'What does success look like for this team in 90 days?',
+                    'How do you validate outcomes beyond dashboard metrics?'
+                );
             }
-            
-            // Add company-specific context if available
+            if (isTech) {
+                questions.push(
+                    'What technical guardrails matter most (cost, latency, reliability)?',
+                    'What data model patterns work best for your core analytics?',
+                    'How do you approach incident response and root‑cause analysis?'
+                );
+            }
+            if (isRecruiter) {
+                questions.push(
+                    'What qualities separate successful hires on this team?',
+                    'What are the must‑have skills for this role?',
+                    'What does the interview timeline and decision process look like?'
+                );
+            }
+
+            // Archetype refinement
+            const a = String(panelistArchetype||'').toLowerCase();
+            if (a.includes('gatekeeper')) questions.push('What are the key compliance or process expectations I should be aware of?');
+            if (a.includes('technical')) questions.push('Which performance and data‑quality checks are most important to you?');
+            if (a.includes('ally')) questions.push('How can I help the team deliver quick wins while building long‑term value?');
+            if (a.includes('skeptic')) questions.push('Where have previous solutions fallen short, and how could this role address that?');
+
             if (appState.extractedData.company) {
-                questions.push(`How does your experience align with ${appState.extractedData.company}'s data culture?`);
+                questions.push(`How does your team define success at ${appState.extractedData.company}?`);
             }
-            
-            return questions;
+            return Array.from(new Set(questions)).slice(0, 8);
         }
 
         function addPanelist() {
@@ -3811,37 +4522,110 @@ GROUP BY previous_tier, current_tier;`;
 
         async function generateCulturalAnalysis() {
             const culturalDiv = document.getElementById('culturalFit');
-            
-            // Check if there's already meaningful content loaded from files
-            const hasRealContent = culturalDiv.innerHTML.trim() && 
-                                 !culturalDiv.innerHTML.includes('How to Demonstrate Cultural Fit') &&
-                                 !culturalDiv.innerHTML.includes('Use data in every answer') &&
-                                 !culturalDiv.innerHTML.includes('Cultural analysis will be populated here') &&
-                                 culturalDiv.innerHTML.length > 100 &&
-                                 culturalDiv.innerHTML.includes('Google Play Cultural Intelligence');
-            
-            if (hasRealContent) {
-                // Don't overwrite existing cultural analysis data
-                console.log('✅ Preserving existing cultural fit analysis');
-                showToast('Cultural fit analysis already loaded!', 'info');
-                return;
-            }
-            
-            const analysisHTML = `
-                <div style="padding: 1rem; background: #f0f9ff; border-radius: 0.5rem; border-left: 4px solid #0ea5e9;">
-                    <div style="display: flex; align-items: center; margin-bottom: 0.5rem;">${aiBadge()}</div>
-                    <p><strong>How to Demonstrate Cultural Fit:</strong></p>
-                    <ul>
-                        <li>• Use data in every answer</li>
-                        <li>• Emphasize collaboration</li>
-                        <li>• Show user-centric thinking</li>
-                        <li>• Demonstrate learning mindset</li>
-                    </ul>
-                </div>
-            `;
-            
-            culturalDiv.innerHTML = analysisHTML;
-            showToast('Cultural fit guidance generated!', 'success');
+            if (!culturalDiv) return;
+
+            const text = getCombinedContent();
+            const company = cleanCompanyDisplayName(appState.extractedData.company || '');
+            const role = cleanRoleTitle(appState.extractedData.role || '');
+            const tech = deriveTechStack(text).slice(0, 8);
+            const metrics = appState.extractedData.metrics || [];
+            const panelists = appState.extractedData.panelists || [];
+
+            // Try LLM-driven cultural summary first if enabled
+            try {
+                if (window.__LLM_ENABLED__) {
+                    const llm = await llmExtract('culture', text);
+                    if (llm && (llm.values?.length || llm.signals?.length || llm.workMode || llm.benefits?.length)) {
+                        const panelistList = panelists.map(p => `${p.name}${p.role?` — ${p.role}`:''}`).join('<br>') || 'Derived from JD when available';
+                        const html = `
+                            <div>
+                                <div style="display:flex; align-items:center; gap:0.5rem; margin-bottom:0.75rem;">${aiBadge()}<h4 style="margin:0; color:#0ea5e9;">Cultural Fit Signals${company?` — ${company}`:''}</h4></div>
+                                ${llm.workMode ? `<div style=\"background:#f0fdf4; padding:1rem; border-radius:0.5rem; margin-bottom:1rem;\"><strong>Work Style:</strong> ${llm.workMode}${llm.officeDays?` (${llm.officeDays})`:''}</div>` : ''}
+                                <div class="grid grid-2" style="gap:1rem;">
+                                    <div style="background:#eff6ff; padding:1rem; border-radius:0.5rem;">
+                                        <h5 style="margin:0 0 0.5rem 0; color:#2563eb;">What They Value</h5>
+                                        <ul style="margin:0; padding-left:1rem;">${(llm.values||[]).map(v=>`<li>${v}</li>`).join('') || '<li>Collaboration</li><li>Data-driven decisions</li>'}</ul>
+                                    </div>
+                                    <div style="background:#f8fafc; padding:1rem; border-radius:0.5rem;">
+                                        <h5 style="margin:0 0 0.5rem 0; color:#0ea5e9;">Signals To Emphasize</h5>
+                                        <ul style="margin:0; padding-left:1rem;">${(llm.signals||[]).map(s=>`<li>${s}</li>`).join('') || '<li>Outcome-first stories</li><li>Partnering across functions</li>'}</ul>
+                                    </div>
+                                </div>
+                                <div style="background:#f3e8ff; padding:1rem; border-radius:0.5rem; margin-top:1rem;">
+                                    <h5 style="margin:0 0 0.5rem 0; color:#7c3aed;">Panelist Context</h5>
+                                    <div style="font-size:0.95rem;">${panelistList}</div>
+                                </div>
+                                ${(llm.benefits||[]).length ? `<div style=\"background:#fff7ed; padding:1rem; border-radius:0.5rem; margin-top:1rem;\"><h5 style=\"margin:0 0 0.5rem 0; color:#f59e0b;\">Benefits Signals</h5><div>${(llm.benefits||[]).join(' · ')}</div></div>` : ''}
+                            </div>`;
+                        culturalDiv.innerHTML = html;
+                        appState.extractedData.culturalNotes = html;
+                        showToast('Cultural fit analysis generated (LLM-assisted)', 'success');
+                        return;
+                    }
+                }
+            } catch (e) { /* ignore */ }
+
+            // Work mode and pace
+            const workMode = (/hybrid/i.test(text) ? 'Hybrid' : /remote/i.test(text) ? 'Remote' : /on\s*site|onsite/i.test(text) ? 'Onsite' : '—');
+            const officeDays = (text.match(/(\d)\s*(?:days|day)\s*\/\s*week\s*in\s*office/i) || [])[1] || '';
+            const pace = (/fast[-\s]?paced|rapid(ly)?\s+growing|high\s+visibility/i.test(text) ? 'Fast-paced, high-visibility' : 'Balanced, outcomes-focused');
+
+            // Values/behaviors from text
+            const values = [];
+            if (/collaborat/i.test(text) || /cross[-\s]?functional/i.test(text)) values.push('Collaboration with cross-functional partners');
+            if (/data[-\s]?driven|evidence|metrics/i.test(text)) values.push('Data-driven decision making');
+            if (/customer|user[-\s]?centric/i.test(text)) values.push('Customer- and user-centric thinking');
+            if (/ownership|accountab/i.test(text)) values.push('Ownership and accountability');
+            if (/innovation|continuous\s+improve|kaizen|six\s*sigma/i.test(text)) values.push('Continuous improvement and innovation');
+            if (/communication|present/i.test(text)) values.push('Clear communication with executives');
+
+            // Benefits/comp signals (best-effort)
+            const benefits = [];
+            if (/health|dental|vision/i.test(text)) benefits.push('Health/Dental/Vision');
+            if (/bonus/i.test(text)) benefits.push('Annual Bonus');
+            if (/pto|paid\s+time\s+off|vacation/i.test(text)) benefits.push('PTO / Vacation');
+            if (/holiday/i.test(text)) benefits.push('Paid Holidays');
+
+            // Signals to emphasize based on tech/metrics/panelists
+            const signals = [];
+            if (tech.includes('SQL')) signals.push('Rigor with SQL and data validation');
+            if (tech.includes('Power BI') || tech.includes('Tableau') || tech.includes('Looker')) signals.push('Clarity in dashboard storytelling');
+            if (/BigQuery|Snowflake|Redshift/i.test(text)) signals.push('Scalable analytics on modern cloud DW');
+            if (metrics.length) signals.push(`Outcome orientation (e.g., ${metrics[0].value} ${metrics[0].label})`);
+            if (panelists.some(p=>/CIO|Chief|Director/i.test(p.role||''))) signals.push('Executive-ready communication');
+
+            const panelistList = panelists.map(p => `${p.name}${p.role?` — ${p.role}`:''}`).join('<br>') || 'Derived from JD when available';
+
+            const html = `
+                <div>
+                    <div style="display:flex; align-items:center; gap:0.5rem; margin-bottom:0.75rem;">${aiBadge()}<h4 style="margin:0; color:#0ea5e9;">Cultural Fit Signals${company?` — ${company}`:''}</h4></div>
+                    <div style="background:#f0fdf4; padding:1rem; border-radius:0.5rem; margin-bottom:1rem;">
+                        <strong>Work Style:</strong> ${workMode}${officeDays?` (${officeDays} days/week in office)`:''} · ${pace}
+                    </div>
+                    <div class="grid grid-2" style="gap:1rem;">
+                        <div style="background:#eff6ff; padding:1rem; border-radius:0.5rem;">
+                            <h5 style="margin:0 0 0.5rem 0; color:#2563eb;">What They Value</h5>
+                            <ul style="margin:0; padding-left:1rem;">
+                                ${(values.length?values:['Collaboration','Data-driven decisions','Clear communication']).map(v=>`<li>${v}</li>`).join('')}
+                            </ul>
+                        </div>
+                        <div style="background:#f8fafc; padding:1rem; border-radius:0.5rem;">
+                            <h5 style="margin:0 0 0.5rem 0; color:#0ea5e9;">Signals To Emphasize</h5>
+                            <ul style="margin:0; padding-left:1rem;">
+                                ${(signals.length?signals:['Outcome-first stories with numbers','Partnering across functions','Speed with quality']).map(s=>`<li>${s}</li>`).join('')}
+                            </ul>
+                        </div>
+                    </div>
+                    <div style="background:#f3e8ff; padding:1rem; border-radius:0.5rem; margin-top:1rem;">
+                        <h5 style="margin:0 0 0.5rem 0; color:#7c3aed;">Panelist Context</h5>
+                        <div style="font-size:0.95rem;">${panelistList}</div>
+                    </div>
+                    ${benefits.length ? `<div style=\"background:#fff7ed; padding:1rem; border-radius:0.5rem; margin-top:1rem;\"><h5 style=\"margin:0 0 0.5rem 0; color:#f59e0b;\">Benefits Signals</h5><div>${benefits.join(' · ')}</div></div>` : ''}
+                </div>`;
+
+            culturalDiv.innerHTML = html;
+            appState.extractedData.culturalNotes = html;
+            showToast('Cultural fit analysis generated from your files!', 'success');
         }
 
         async function generatePanelistQuestion(name) {
@@ -5840,11 +6624,18 @@ ${highlights.join('\n')}
         }
 
         function determineArchetypeFromRole(role) {
-            const r = role.toLowerCase();
-            if (/scientist|engineer|architect|analyst/.test(r)) return 'Technical Expert';
-            if (/recruiter|talent|hr/.test(r)) return 'Ally';
-            if (/director|head|lead|manager/.test(r)) return 'Champion';
-            if (/program|operations|coordinator|gate/.test(r)) return 'Gatekeeper';
+            const r = String(role || '').toLowerCase();
+            // Ally: recruiting functions
+            if (/\b(recruiter|talent|hr|people\s*ops)\b/.test(r)) return 'Ally';
+            // Champion: executives and leadership
+            if (/\b(cio|cto|cfo|ceo|coo|cso|cmo|chief|vp|vice\s*president|president|director|head)\b/.test(r)) return 'Champion';
+            if (/\b(manager|lead|owner)\b/.test(r)) return 'Champion';
+            // Technical expert: hands-on technical roles
+            if (/\b(architect|engineer|developer|scientist|analyst|bi\s*architect|data\s+engineer|data\s+scientist)\b/.test(r)) return 'Technical Expert';
+            // Gatekeeper: coordination and process-centric roles
+            if (/\b(program\s*coordinator|operations|coordinator|gate\s*keep|compliance|procurement)\b/.test(r)) return 'Gatekeeper';
+            // Program Manager: treat as leadership by default
+            if (/\bprogram\s*manager\b/.test(r)) return 'Champion';
             return 'Ally';
         }
 

@@ -99,40 +99,43 @@
                             <span id="processBtnIcon">✨</span>
                             <span id="processBtnText">Process Files</span>
                         </button>
+                        <button class="btn btn-secondary" data-action="load-test-files" title="Load files from input_files_test" style="margin-left: 0.5rem;">
+                            Use Test Files
+                        </button>
                     </div>
                 </div>
 
                 <!-- Upload Checklist -->
                 <div class="card" id="uploadChecklistCard">
                     <h3 style="font-size: 1.25rem; font-weight: 600; margin-bottom: 0.75rem;">Upload Checklist</h3>
-                    <p style="color: #64748b; margin-bottom: 0.75rem;">Required and optional files to unlock all features.</p>
+                    <p style="color: #64748b; margin-bottom: 0.75rem;">Resume and Job Description are required. Others are optional and enhance the dashboard.</p>
                     <div id="uploadChecklist" class="grid grid-2">
                         <div>
-                            <div id="check-jd" style="padding:0.5rem; border-left:4px solid #ef4444; background:#fff7ed; border-radius:0.25rem; margin-bottom:0.5rem;">
-                                <strong>Job Description (JD)</strong>
-                                <div style="font-size:0.875rem; color:#64748b;">Contains Interview Date</div>
-                                <div style="font-size:0.75rem; color:#94a3b8;">Filename contains "JD" (.md/.txt/.docx/.pdf)</div>
+                            <div id="check-resume" style="padding:0.75rem; border-left:4px solid #0ea5e9; background:#eff6ff; border-radius:0.5rem; margin-bottom:0.75rem; transition: all .25s ease;">
+                                <strong>Resume</strong> <span style="font-size:0.75rem; color:#ef4444; margin-left:0.25rem;">Required</span>
+                                <div style="font-size:0.875rem; color:#64748b;">Used to extract strengths and infer role</div>
+                                <div style="font-size:0.75rem; color:#94a3b8;">Supported: .md / .txt / .docx / .pdf / .csv</div>
                             </div>
-                            <div id="check-qa" style="padding:0.5rem; border-left:4px solid #eab308; background:#fefce8; border-radius:0.25rem; margin-bottom:0.5rem;">
-                                <strong>Q&A Bank</strong>
-                                <div style="font-size:0.875rem; color:#64748b;">CSV or Markdown of questions</div>
-                                <div style="font-size:0.75rem; color:#94a3b8;">e.g., questions.csv / .md</div>
+                            <div id="check-intel" style="padding:0.75rem; border-left:4px solid #eab308; background:#fefce8; border-radius:0.5rem; margin-bottom:0.75rem; transition: all .25s ease;">
+                                <strong>Company Intel</strong>
+                                <div style="font-size:0.875rem; color:#64748b;">Playbooks, notes, strategic context</div>
+                                <div style="font-size:0.75rem; color:#94a3b8;">Supported: .md / .txt / .docx / .pdf / .csv</div>
                             </div>
                         </div>
                         <div>
-                            <div id="check-metrics" style="padding:0.5rem; border-left:4px solid #eab308; background:#fefce8; border-radius:0.25rem; margin-bottom:0.5rem;">
-                                <strong>Key Metrics CSV</strong>
-                                <div style="font-size:0.875rem; color:#64748b;">Populates Strategic tiles</div>
-                                <div style="font-size:0.75rem; color:#94a3b8;">Filename contains "metric" (.csv)</div>
+                            <div id="check-jd" style="padding:0.75rem; border-left:4px solid #ef4444; background:#fff7ed; border-radius:0.5rem; margin-bottom:0.75rem; transition: all .25s ease;">
+                                <strong>Job Description</strong> <span style="font-size:0.75rem; color:#ef4444; margin-left:0.25rem;">Required</span>
+                                <div style="font-size:0.875rem; color:#64748b;">Used to parse interview date and panelists</div>
+                                <div style="font-size:0.75rem; color:#94a3b8;">Filename contains "JD" or "Job Description". Supported: .md / .txt / .docx / .pdf / .csv</div>
                             </div>
-                            <div id="check-intel" style="padding:0.5rem; border-left:4px solid #eab308; background:#fefce8; border-radius:0.25rem; margin-bottom:0.5rem;">
-                                <strong>Company Intel / Playbook</strong>
-                                <div style="font-size:0.875rem; color:#64748b;">Strategic notes, context</div>
-                                <div style="font-size:0.75rem; color:#94a3b8;">.md/.docx/.pdf</div>
+                            <div id="check-resources" style="padding:0.75rem; border-left:4px solid #22c55e; background:#f0fdf4; border-radius:0.5rem; margin-bottom:0.75rem; transition: all .25s ease;">
+                                <strong>Additional Resources</strong>
+                                <div style="font-size:0.875rem; color:#64748b;">Q&A banks, metrics, scenarios, examples, or other assets</div>
+                                <div style="font-size:0.75rem; color:#94a3b8;">Supported: .md / .txt / .docx / .pdf / .csv</div>
                             </div>
                         </div>
                     </div>
-                    <div id="uploadChecklistNote" style="margin-top:0.75rem; font-size:0.875rem; color:#64748b;">JD is required to enable the interview countdown. Others are optional but enhance the dashboard.</div>
+                    <div id="uploadChecklistNote" style="margin-top:0.75rem; font-size:0.875rem; color:#64748b;">Resume and JD are required to enable core features (panel parsing, date countdown, strengths). Other files enrich the dashboard.</div>
                 </div>
 
                 <div class="card">

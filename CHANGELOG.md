@@ -1,5 +1,55 @@
 # Changelog - Google Play Interview Prep Dashboard
 
+## Session: September 7, 2025
+
+### Major Changes
+
+#### 🎯 End‑to‑End Dynamic Extraction (No Hardcoding)
+- Removed remaining hardcoded examples in STAR Stories and company/role logic; all content now derives from uploaded materials.
+- Header title now displays a cleaned company name from the JD/resume (cuts parentheses/acronyms, stops at sentence starts, dedupes, clamps length).
+
+#### 🤖 Optional LLM Assist (Gemini)
+- Added a secure, serverless LLM proxy (`api/llm.js`) that supports tasks: `panelists`, `star`, `culture`, `companyRole`, `metrics`, `strengths`, `questions`.
+- Client hooks (`llmExtract`) merge LLM results only when helpful, with strict fallbacks to deterministic parsers.
+- Feature is opt‑in by default and never exposes a key to the browser (reads `GEMINI_API_KEY` on the server; temporary local fallback key provided and intended for rotation).
+
+#### 👥 Panelists Extraction (JD‑First, Robust)
+- Rewrote JD parsing to handle PDF quirks:
+  - LinkedIn‑anchored scan pairs each profile URL with the nearest preceding “Name, Role” line.
+  - Bullet/inline parser scopes to the “Interviewing With” section; accepts “Name, Role (link)” and name/role on adjacent lines.
+  - Keeps panelists even when role text is missing/garbled (no silent drops).
+- Added a rescue pass that always runs after JD + LLM to catch link‑only lines.
+- Normalized role→archetype mapping (Champion/Ally/Gatekeeper/Technical Expert) with stronger, company‑agnostic rules.
+- Removed the previous cap of 3 panelists; renders any number present (1+).
+- Added a debug mode (`?debug=1`) that shows a breakdown (LinkedIn‑anchored/Bullets/Fallback/LLM/Rescued/Final) above the panelist grid.
+
+#### ⭐ STAR Stories (From Materials Only)
+- Replaced embedded samples with a generic S/T/A/R extractor that reads labeled blocks (Situation/Task/Action/Result or S/T/A/R) from uploaded text.
+- If few/no stories are found, optionally calls the LLM to summarize additional S/T/A/R items from your materials; deduped and capped.
+
+#### 🧠 Cultural Fit (Context‑Dependent)
+- “Generate Analysis” builds work mode, values, signals, benefits, and panelist context from uploaded content.
+- When enabled, LLM provides a structured cultural summary; otherwise, heuristics use the JD/resume content.
+
+#### 🧹 Company/Role & Metrics/Strengths/Q&A
+- Company and role: improved cleaners (stop at verbs, strip parentheses/acronyms, dedupe tokens, clamp words).
+- Metrics/Strengths/Questions: deterministic extractors supplemented by LLM only when needed; merge safely without duplicates.
+
+### UI/UX & Styling
+- Unified gradient across header and body; uses `background-attachment: fixed` for a continuous look.
+- Added “Use Test Files” button and a test manifest for fast local validation.
+
+### Files Added/Updated
+- `api/llm.js` – Vercel serverless function for Gemini proxy.
+- `assets/js/app.js` – Major refactor: JD parsers, LLM hooks, STAR/culture/company/metrics/strengths/Q&A extraction, archetype mapping, debug tools.
+- `assets/css/styles.css` – Unified gradient for body/header.
+- `index.html` – “Use Test Files” action; debug compatible.
+- `input_files_test/manifest.json` – Test manifest used by the one‑click loader.
+
+### Usage Notes
+- To enable debug view of panelist extraction, open with `?debug=1`.
+- LLM is optional; set `GEMINI_API_KEY` in Vercel for production. The dashboard still works without it using deterministic parsers.
+
 ## Session: September 5, 2025
 
 ### Major Changes
