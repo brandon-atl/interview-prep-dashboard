@@ -1474,11 +1474,15 @@ GROUP BY previous_tier, current_tier;`;
                         if (alt.length) { all.push(...alt); dbg.viaFallback.push(...alt.map(p=>({source:name,...p}))); }
                     }
                 });
-                // 3) Optional LLM assist over combined JD content
+                // 3) Optional LLM assist over combined content (excluding resume)
                 try {
                     if (window.__LLM_ENABLED__) {
-                        const combinedJD = jdEntries.map(([n,t]) => t || '').join('\n');
-                        const llm = await llmExtract('panelists', combinedJD);
+                        const combinedContent = Object.entries(appState.fileContents || {})
+                            .filter(([name]) => !/resume|cv/i.test(name))
+                            .map(([, content]) => content)
+                            .join('\n\n');
+
+                        const llm = await llmExtract('panelists', combinedContent);
                         if (Array.isArray(llm) && llm.length) {
                             const mapped = llm.map(p => ({
                                 name: p.name,
@@ -1490,7 +1494,7 @@ GROUP BY previous_tier, current_tier;`;
                             dbg.viaLLM.push(...mapped);
                         }
                         // Always run rescue to capture any leftover link/name pairs
-                        const rescued = rescuePanelistsFromLinks(combinedJD);
+                        const rescued = rescuePanelistsFromLinks(combinedContent);
                         if (rescued.length) { all.push(...rescued); dbg.viaRescue.push(...rescued); }
                     }
                 } catch (e) { /* ignore */ }
