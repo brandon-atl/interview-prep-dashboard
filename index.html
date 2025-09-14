@@ -48,13 +48,13 @@
                         Master Interview Prep Dashboard
                     </h1>
                     <p id="dashboardSubtitle" style="opacity: 0.9;">Your personalized strategic dashboard</p>
-                    <div id="interviewCountdown" style="margin-top: 1rem; padding: 1rem; background: rgba(255,255,255,0.1); border-radius: 0.75rem; border: 1px solid rgba(255,255,255,0.2); backdrop-filter: blur(10px); position: relative; z-index: 1;">
+                    <div id="interviewCountdown" style="display: none; margin-top: 1rem; padding: 1rem; background: rgba(255,255,255,0.1); border-radius: 0.75rem; border: 1px solid rgba(255,255,255,0.2); backdrop-filter: blur(10px); position: relative; z-index: 1;">
                         <div style="font-size: 0.875rem; opacity: 0.8; margin-bottom: 0.5rem; display: flex; align-items: center; gap: 0.5rem;">
                             <div style="width: 8px; height: 8px; background: #10b981; border-radius: 50%; animation: pulse 2s infinite;"></div>
-                            Google BI/Data Analyst Interview
+                            <span id="interviewLabel">Interview Countdown</span>
                         </div>
-                        <div style="font-size: 1.5rem; font-weight: 700; font-family: 'SF Mono', Consolas, monospace; letter-spacing: 0.05em;" id="countdownDisplay">Loading...</div>
-                        <div style="font-size: 0.75rem; opacity: 0.7; margin-top: 0.5rem;">Tuesday, Sep 2 | 12:30 PM EDT</div>
+                        <div style="font-size: 1.5rem; font-weight: 700; font-family: 'SF Mono', Consolas, monospace; letter-spacing: 0.05em;" id="countdownDisplay"></div>
+                        <div id="interviewDateText" style="font-size: 0.75rem; opacity: 0.7; margin-top: 0.5rem;"></div>
                     </div>
                 </div>
             </div>
@@ -81,7 +81,7 @@
                     <h3 style="font-size: 1.25rem; font-weight: 600; margin-bottom: 1rem;">
                         Document Analysis
                     </h3>
-                    <p style="color: #64748b; margin-bottom: 1rem;">Upload your materials or use sample data</p>
+                    <p style="color: #64748b; margin-bottom: 1rem;">Upload your materials to get started</p>
                     
                     <div class="file-drop-zone" id="fileDropZone">
                         <input type="file" id="fileInput" multiple accept=".pdf,.txt,.docx,.csv,.json,.md" style="display: none;">
@@ -99,10 +99,43 @@
                             <span id="processBtnIcon">✨</span>
                             <span id="processBtnText">Process Files</span>
                         </button>
-                        <button class="btn btn-secondary" style="margin-left: 0.5rem;" data-action="load-sample">
-                            <span>📁</span> Load From input_files
+                        <button class="btn btn-secondary" data-action="load-test-files" title="Load files from input_files_test" style="margin-left: 0.5rem;">
+                            Use Test Files
                         </button>
                     </div>
+                </div>
+
+                <!-- Upload Checklist -->
+                <div class="card" id="uploadChecklistCard">
+                    <h3 style="font-size: 1.25rem; font-weight: 600; margin-bottom: 0.75rem;">Upload Checklist</h3>
+                    <p style="color: #64748b; margin-bottom: 0.75rem;">Resume and Job Description are required. Others are optional and enhance the dashboard.</p>
+                    <div id="uploadChecklist" class="grid grid-2">
+                        <div>
+                            <div id="check-resume" style="padding:0.75rem; border-left:4px solid #0ea5e9; background:#eff6ff; border-radius:0.5rem; margin-bottom:0.75rem; transition: all .25s ease;">
+                                <strong>Resume</strong> <span style="font-size:0.75rem; color:#ef4444; margin-left:0.25rem;">Required</span>
+                                <div style="font-size:0.875rem; color:#64748b;">Used to extract strengths and infer role</div>
+                                <div style="font-size:0.75rem; color:#94a3b8;">Supported: .md / .txt / .docx / .pdf / .csv</div>
+                            </div>
+                            <div id="check-intel" style="padding:0.75rem; border-left:4px solid #eab308; background:#fefce8; border-radius:0.5rem; margin-bottom:0.75rem; transition: all .25s ease;">
+                                <strong>Company Intel</strong>
+                                <div style="font-size:0.875rem; color:#64748b;">Playbooks, notes, strategic context</div>
+                                <div style="font-size:0.75rem; color:#94a3b8;">Supported: .md / .txt / .docx / .pdf / .csv</div>
+                            </div>
+                        </div>
+                        <div>
+                            <div id="check-jd" style="padding:0.75rem; border-left:4px solid #ef4444; background:#fff7ed; border-radius:0.5rem; margin-bottom:0.75rem; transition: all .25s ease;">
+                                <strong>Job Description</strong> <span style="font-size:0.75rem; color:#ef4444; margin-left:0.25rem;">Required</span>
+                                <div style="font-size:0.875rem; color:#64748b;">Used to parse interview date and panelists</div>
+                                <div style="font-size:0.75rem; color:#94a3b8;">Filename contains "JD" or "Job Description". Supported: .md / .txt / .docx / .pdf / .csv</div>
+                            </div>
+                            <div id="check-resources" style="padding:0.75rem; border-left:4px solid #22c55e; background:#f0fdf4; border-radius:0.5rem; margin-bottom:0.75rem; transition: all .25s ease;">
+                                <strong>Additional Resources</strong>
+                                <div style="font-size:0.875rem; color:#64748b;">Q&A banks, metrics, scenarios, examples, or other assets</div>
+                                <div style="font-size:0.75rem; color:#94a3b8;">Supported: .md / .txt / .docx / .pdf / .csv</div>
+                            </div>
+                        </div>
+                    </div>
+                    <div id="uploadChecklistNote" style="margin-top:0.75rem; font-size:0.875rem; color:#64748b;">Resume and JD are required to enable core features (panel parsing, date countdown, strengths). Other files enrich the dashboard.</div>
                 </div>
 
                 <div class="card">
@@ -115,13 +148,24 @@
             
             <!-- Command Center Tab -->
             <div class="tab-content" id="command">
-                <h2 style="font-size: 1.5rem; font-weight: 600; margin-bottom: 1.5rem; text-align: center;">Strategic Imperative</h2>
+                <h2 style="font-size: 1.5rem; font-weight: 600; margin-bottom: 0.75rem; text-align: center;">Strategic Imperative</h2>
+                <div style="display:flex; justify-content:center; gap:0.5rem; margin-bottom:0.75rem; flex-wrap: wrap;">
+                    <button class="btn btn-secondary" data-action="copy-metrics" title="Copy visible tiles as Markdown">
+                        Copy Metrics
+                    </button>
+                    <button class="btn btn-secondary" data-action="download-snapshot" title="Download snapshot as Markdown">
+                        Export Snapshot
+                    </button>
+                    <button class="btn btn-secondary" data-action="copy-snapshot" title="Copy snapshot as Markdown">
+                        Copy Snapshot
+                    </button>
+                </div>
                 
                 <div id="keyMetrics" class="grid grid-5" style="margin-bottom: 2rem;">
                     <!-- Metrics will be populated here -->
                 </div>
                 
-                <div class="card">
+                <div class="card requires-data" id="powerIntroCard" style="display:none;">
                     <h3 style="font-size: 1.25rem; font-weight: 600; margin-bottom: 1rem;">Your 90-Second Power Intro</h3>
                     <div id="powerIntro" class="prose">
                         <p style="color: #64748b;">Upload your materials to generate your personalized elevator pitch</p>
@@ -132,7 +176,7 @@
                     </button>
                 </div>
 
-                <div class="card">
+                <div class="card requires-data" id="talkingPointsCard" style="display:none;">
                     <h3 style="font-size: 1.25rem; font-weight: 600; margin-bottom: 1rem;">Key Talking Points</h3>
                     <div id="talkingPoints" class="prose">
                         <p style="color: #64748b;">Generated from your materials</p>
@@ -144,14 +188,14 @@
                 </div>
                 
                 <div class="grid grid-2">
-                    <div class="card">
+                    <div class="card requires-data" id="strengthsCard" style="display:none;">
                         <h3 style="font-size: 1.25rem; font-weight: 600; margin-bottom: 1rem; color: #22c55e;">✅ Key Strengths</h3>
                         <div id="strengthsList">
                             <!-- Strengths will be populated here -->
                         </div>
                     </div>
                     
-                    <div class="card">
+                    <div class="card requires-data" id="gapsCard" style="display:none;">
                         <h3 style="font-size: 1.25rem; font-weight: 600; margin-bottom: 1rem; color: #f59e0b;">⚠️ Potential Gaps to Address</h3>
                         <div id="gapsList">
                             <!-- Gaps will be populated here -->
@@ -174,10 +218,15 @@
                 </div>
                 
                 <div class="card">
-                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; gap:0.5rem;">
                         <h3 style="font-size: 1.25rem; font-weight: 600;">Briefing</h3>
-                        <span id="sourceType" style="font-size: 0.75rem; background: #e2e8f0; padding: 0.25rem 0.75rem; border-radius: 9999px;">Source Materials</span>
+                        <div style="display:flex; align-items:center; gap:0.5rem;">
+                            <button class="btn btn-secondary" data-action="copy-briefing" title="Copy briefing as Markdown">Copy</button>
+                            <button class="btn btn-secondary" data-action="download-briefing" title="Download briefing as Markdown">Download</button>
+                            <span id="sourceType" style="font-size: 0.75rem; background: #e2e8f0; padding: 0.25rem 0.75rem; border-radius: 9999px;">Source Materials</span>
+                        </div>
                     </div>
+                    <div id="detectedTech" style="margin-bottom:0.75rem; display:flex; flex-wrap:wrap; gap:0.5rem;"></div>
                     <div id="companyBriefing" class="prose">
                         <!-- Company intel will be populated here -->
                     </div>
@@ -224,10 +273,10 @@
             
             <!-- Q&A Bank Tab -->
             <div class="tab-content" id="questions">
-                <h2 style="font-size: 1.5rem; font-weight: 600; margin-bottom: 1.5rem; text-align: center;">🎯 Google Play Points Q&A Bank</h2>
+                <h2 style="font-size: 1.5rem; font-weight: 600; margin-bottom: 1.5rem; text-align: center;">Q&A Bank</h2>
                 
-                <!-- Interview Context Bar -->
-                <div class="card" style="background: linear-gradient(135deg, #1e40af 0%, #3b82f6 100%); color: white; margin-bottom: 2rem;">
+                <!-- Interview Context Bar (requires data) -->
+                <div class="card requires-data" id="interviewContextBar" style="display:none; background: linear-gradient(135deg, #1e40af 0%, #3b82f6 100%); color: white; margin-bottom: 2rem;">
                     <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 1rem;">
                         <div>
                             <strong>🎯 Key Focus Areas:</strong><br>
@@ -323,30 +372,29 @@
             
             <!-- SQL Practice Tab -->
             <div class="tab-content" id="sql">
-                <h2 style="font-size: 1.5rem; font-weight: 600; margin-bottom: 1.5rem; text-align: center;">🎯 Google Play Points SQL Practice Arena</h2>
+                <h2 style="font-size: 1.5rem; font-weight: 600; margin-bottom: 1.5rem; text-align: center;">🎯 SQL Practice Arena</h2>
                 
-                <!-- Interview Context -->
-                <div class="card" style="background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%); color: white; margin-bottom: 2rem;">
+                <!-- Interview Context (requires data) -->
+                <div class="card requires-data" id="sqlContextCard" style="display:none; background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%); color: white; margin-bottom: 2rem;">
                     <h3 style="margin-bottom: 1rem; color: white;">🎯 Interview Focus: BigQuery at Scale</h3>
                     <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 1rem;">
                         <div>
-                            <strong>Data Scale:</strong> 220M+ Play Points members<br>
-                            <strong>Query Volume:</strong> Billions of transactions daily<br>
-                            <strong>Key Challenge:</strong> Gold→Platinum tier progression
+                            <strong>Data Scale:</strong> <!-- from your docs -->
+                            <br><strong>Query Volume:</strong> <!-- from your docs -->
+                            <br><strong>Key Challenge:</strong> <!-- from your docs -->
                         </div>
                         <div>
-                            <strong>Tech Stack:</strong> BigQuery, PLX, Looker<br>
-                            <strong>Focus Areas:</strong> CTEs, Window Functions, Optimization<br>
-                            <strong>SQL Interviewer:</strong> Brian Mauch (Technical Validation)<br>
-                            <strong>Business Context:</strong> Nikki Diman (Service Delivery)
-                        </div>
+                            <strong>Tech Stack:</strong> <!-- from your docs --><br>
+                            <strong>Focus Areas:</strong> <!-- from your docs --><br>
+                            <strong>Interviewers:</strong> <!-- from your docs -->
+                </div>
                     </div>
                 </div>
 
-                <!-- Google Play Points Schema -->
+                <!-- Schema (requires data) -->
                 <div class="grid grid-2">
-                    <div class="card">
-                        <h3 style="font-size: 1.25rem; font-weight: 600; margin-bottom: 1rem;">🏗️ Google Play Points Schema</h3>
+                    <div class="card requires-data" id="schemaCard" style="display:none;">
+                        <h3 style="font-size: 1.25rem; font-weight: 600; margin-bottom: 1rem;">🏗️ Data Model Schema</h3>
                         <div style="font-family: monospace; font-size: 0.875rem; background: #1e293b; color: #f1f5f9; padding: 1rem; border-radius: 0.5rem;">
                             <div style="color: #10b981; margin-bottom: 0.5rem;">-- Core Tables (220M+ members)</div>
                             <p><strong style="color: #3b82f6;">play_points_members</strong> (member_id, tier_level, total_points, join_date, country)</p>
@@ -360,7 +408,7 @@
                         </div>
                     </div>
                     
-                    <div class="card">
+                    <div class="card requires-data" id="scenariosCard" style="display:none;">
                         <h3 style="font-size: 1.25rem; font-weight: 600; margin-bottom: 1rem;">🔥 Interview Scenarios</h3>
                         <div style="display: flex; flex-direction: column; gap: 0.5rem;">
                             <button class="btn" style="background: #ef4444; color: white; text-align: left; padding: 0.75rem;" data-action="load-sql-scenario" data-scenario="churn">
@@ -382,42 +430,23 @@
                     </div>
                 </div>
 
-                <!-- Advanced SQL Challenges -->
+                <!-- Advanced SQL Challenges (requires data) -->
                 <div class="grid grid-2" style="margin-top: 2rem;">
-                    <div class="card">
+                    <div class="card requires-data" id="sqlChallengesCard" style="display:none;">
                         <h3 style="font-size: 1.25rem; font-weight: 600; margin-bottom: 1rem;">💻 Your BigQuery Solution</h3>
-                        <textarea id="sqlQuery" rows="16" class="input-field" style="font-family: 'Courier New', monospace; background: #1e293b; color: #f1f5f9; font-size: 0.875rem;" placeholder="-- Gold-to-Platinum Progression Analysis (from Interview Playbook)
--- Optimized BigQuery solution for Play Points tier progression
+                        <textarea id="sqlQuery" rows="16" class="input-field" style="font-family: 'Courier New', monospace; background: #1e293b; color: #f1f5f9; font-size: 0.875rem;" placeholder="-- Paste or edit your SQL here. Detected queries from your files will load automatically."></textarea>
 
-WITH progression_analysis AS (
-  SELECT 
-    member_id,
-    tier_level,
-    PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY daily_points) as median_velocity,
-    DATE_DIFF(CURRENT_DATE(), last_activity, DAY) as days_inactive,
-    points_to_next_tier / NULLIF(avg_daily_points, 0) as days_to_promotion,
-    -- Efficient window functions
-    SUM(points_earned) OVER (
-      PARTITION BY member_id 
-      ORDER BY transaction_date
-      ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
-    ) as cumulative_points,
-    ROW_NUMBER() OVER (
-      PARTITION BY member_id 
-      ORDER BY transaction_date DESC
-    ) as recency_rank
-  FROM member_activity 
-  WHERE tier_level = 'Gold'
-    AND DATE(last_activity) >= DATE_SUB(CURRENT_DATE(), INTERVAL 90 DAY)
-)
-SELECT 
-  tier_level,
-  COUNT(DISTINCT member_id) as member_count,
-  AVG(median_velocity) as avg_earning_velocity,
-  AVG(days_to_promotion) as avg_days_to_platinum
-FROM progression_analysis
-WHERE days_to_promotion BETWEEN 1 AND 365  -- Filter unrealistic projections
-GROUP BY tier_level;"></textarea>
+                        <!-- Detected SQL Snippets -->
+                        <div id="sqlSnippetList" style="margin-top: 1rem;">
+                            <div style="display:flex; gap:0.5rem; align-items:center; margin-bottom:0.5rem;">
+                                <label for="sqlSnippetFilter" style="font-size:0.85rem; color:#64748b;">Filter by file:</label>
+                                <select id="sqlSnippetFilter" class="input-field" style="max-width:280px; padding:0.35rem 0.5rem; height:auto;"></select>
+                            </div>
+                            <div id="sqlSnippetItems">
+                                <p style="color: #64748b; font-size: 0.9rem;">Detected SQL snippets will appear here after processing your files.</p>
+                            </div>
+                        </div>
+                        <div id="sqlSourceNote" style="margin-top:0.5rem; font-size:0.8rem; color:#64748b;"></div>
                         
                         <div style="display: flex; gap: 0.5rem; margin-top: 1rem;">
                             <button class="btn btn-primary" style="flex: 1;" data-action="validate-sql">
@@ -667,8 +696,11 @@ GROUP BY tier_level</code></pre>
                     <div id="assistantResponse" style="margin-top: 1.5rem;"></div>
                 </div>
                 
-                <div class="card">
-                    <h3 style="font-size: 1.25rem; font-weight: 600; margin-bottom: 1rem;">💡 Quick Interview Tips</h3>
+                <div class="card requires-data" id="quickTipsCard" style="display:none;">
+                    <div style="display:flex; align-items:center; justify-content: space-between; margin-bottom: 1rem; gap:0.5rem;">
+                        <h3 style="font-size: 1.25rem; font-weight: 600; margin: 0;">💡 Quick Interview Tips</h3>
+                        <button class="btn btn-secondary" data-action="gen-quick-tips" title="Generate tips from your materials">Generate Tips</button>
+                    </div>
                     <div class="grid grid-2">
                         <div style="background: #f0fdf4; padding: 1rem; border-radius: 0.5rem;">
                             <h4 style="color: #22c55e; margin-bottom: 0.5rem;">✅ Do This</h4>

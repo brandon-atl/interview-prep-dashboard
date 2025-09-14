@@ -1,5 +1,125 @@
 # Changelog - Google Play Interview Prep Dashboard
 
+## Session: September 13, 2025
+
+### Bug Fixes
+
+#### 🐞 Fixed Panelist Extraction
+- **Problem:** Panelist names were not being extracted correctly because the search was limited to only Job Description files, while relevant information was often in other documents like Playbooks or Q&A files.
+- **Solution:** Modified the extraction logic to search the content of all uploaded files (except for resumes/CVs) when using AI-powered and link-rescue methods. This ensures a wider search scope.
+- **Impact:** Panelist extraction is now more robust and accurate, correctly identifying interviewers from any of the provided materials while still preventing the candidate's name from being included.
+
+## Session: September 7, 2025
+
+### Major Changes
+
+#### 🎯 End‑to‑End Dynamic Extraction (No Hardcoding)
+- Removed remaining hardcoded examples in STAR Stories and company/role logic; all content now derives from uploaded materials.
+- Header title now displays a cleaned company name from the JD/resume (cuts parentheses/acronyms, stops at sentence starts, dedupes, clamps length).
+
+#### 🤖 Optional LLM Assist (Gemini)
+- Added a secure, serverless LLM proxy (`api/llm.js`) that supports tasks: `panelists`, `star`, `culture`, `companyRole`, `metrics`, `strengths`, `questions`.
+- Client hooks (`llmExtract`) merge LLM results only when helpful, with strict fallbacks to deterministic parsers.
+- Feature is opt‑in by default and never exposes a key to the browser (reads `GEMINI_API_KEY` on the server; temporary local fallback key provided and intended for rotation).
+
+#### 👥 Panelists Extraction (JD‑First, Robust)
+- Rewrote JD parsing to handle PDF quirks:
+  - LinkedIn‑anchored scan pairs each profile URL with the nearest preceding “Name, Role” line.
+  - Bullet/inline parser scopes to the “Interviewing With” section; accepts “Name, Role (link)” and name/role on adjacent lines.
+  - Keeps panelists even when role text is missing/garbled (no silent drops).
+- Added a rescue pass that always runs after JD + LLM to catch link‑only lines.
+- Normalized role→archetype mapping (Champion/Ally/Gatekeeper/Technical Expert) with stronger, company‑agnostic rules.
+- Removed the previous cap of 3 panelists; renders any number present (1+).
+- Added a debug mode (`?debug=1`) that shows a breakdown (LinkedIn‑anchored/Bullets/Fallback/LLM/Rescued/Final) above the panelist grid.
+
+#### ⭐ STAR Stories (From Materials Only)
+- Replaced embedded samples with a generic S/T/A/R extractor that reads labeled blocks (Situation/Task/Action/Result or S/T/A/R) from uploaded text.
+- If few/no stories are found, optionally calls the LLM to summarize additional S/T/A/R items from your materials; deduped and capped.
+
+#### 🧠 Cultural Fit (Context‑Dependent)
+- “Generate Analysis” builds work mode, values, signals, benefits, and panelist context from uploaded content.
+- When enabled, LLM provides a structured cultural summary; otherwise, heuristics use the JD/resume content.
+
+#### 🧹 Company/Role & Metrics/Strengths/Q&A
+- Company and role: improved cleaners (stop at verbs, strip parentheses/acronyms, dedupe tokens, clamp words).
+- Metrics/Strengths/Questions: deterministic extractors supplemented by LLM only when needed; merge safely without duplicates.
+
+### UI/UX & Styling
+- Unified gradient across header and body; uses `background-attachment: fixed` for a continuous look.
+- Added “Use Test Files” button and a test manifest for fast local validation.
+
+### Files Added/Updated
+- `api/llm.js` – Vercel serverless function for Gemini proxy.
+- `assets/js/app.js` – Major refactor: JD parsers, LLM hooks, STAR/culture/company/metrics/strengths/Q&A extraction, archetype mapping, debug tools.
+- `assets/css/styles.css` – Unified gradient for body/header.
+- `index.html` – “Use Test Files” action; debug compatible.
+- `input_files_test/manifest.json` – Test manifest used by the one‑click loader.
+
+### Usage Notes
+- To enable debug view of panelist extraction, open with `?debug=1`.
+- LLM is optional; set `GEMINI_API_KEY` in Vercel for production. The dashboard still works without it using deterministic parsers.
+
+## Session: September 5, 2025
+
+### Major Changes
+
+#### 🚫 Upload-First, Agnostic Dashboard
+- Removed all auto-loading and hardcoded/sampled data paths
+- Disabled all tabs until files are processed; Upload is the landing tab
+- Hid Interview Countdown until a JD file (filename contains "JD") with an `Interview Date:` is parsed
+- Replaced remaining static copy with placeholders; content is now derived only from uploaded files
+
+#### 🧭 Command Center Now Data-Driven
+- Metrics tiles: render only from uploaded metrics (CSV or extracted) with strict validation (currency/percent/M,B,K)
+- Removed CSV-from-text mis-parsing; CSV parsing occurs only for explicit metrics CSV uploads
+- Nonsense tiles eliminated; long labels/growth/context are truncated for clean UI
+- Added Copy Metrics button (Markdown)
+
+#### 🧠 Company Intel (Agnostic)
+- Added `extractCompanyIntelAgnostic()` to build a Markdown briefing from uploaded content:
+  - Detected tech stack, key metrics, strengths, and gaps
+- Render briefing as Markdown; added tech stack badges above briefing
+- Copy/Download briefing actions (Markdown)
+
+#### 📄 Resume Integration
+- Text extraction from uploaded resume files (filename contains "resume")
+- Merged resume-derived strengths into Command Center strengths
+- Role inference from resume when not available elsewhere (prefers recent dated title lines)
+- PDF resumes supported via PDF.js; DOCX via Mammoth
+
+#### 🧩 SQL-Only Experience, With Helpers
+- SQL tab shows only if SQL is detected in uploads
+- Parsed ```sql fenced blocks and inline SELECT/WITH queries; best snippet auto-loads into editor
+- Snippet picker with file filter, source note, and Copy button
+- Dynamic schema (tables from SQL) and scenarios derived from document signals (retention, segmentation, optimization, pipelines)
+- Enriched SQL Context card: fills scale, volume, key challenge, tech stack, focus areas, and interviewers from data
+
+#### ✍️ Power Intro & Talking Points
+- Power Intro generator is now agnostic and built from your metrics, strengths, and tech stack
+- Talking Points generator derives Technical Relevance, Proof Points, and Strengths from uploaded content
+
+#### 🔖 Quick Tips
+- Tips generated from strengths, gaps, and tech stack; Generate Tips button added
+
+#### 📦 Snapshot Export
+- Export Snapshot (Markdown) and Copy Snapshot actions include: tech stack, metrics, strengths, gaps, panelists, top Q&A, SQL snippet list, and the executive brief
+
+### Technical Notes
+- Added resume-based helpers: role inference and strength extraction from uploaded resume files
+- Added PDF parsing to `readFileContent()` to support PDF uploads across the app
+- Added UI gating (`requires-data`) and disabled classes for tabs before processing
+- Added source notes/tooltips for metrics and SQL snippet sources
+
+### Files Updated (highlights)
+- `index.html`: upload-first UI, requires-data gating, toolbars (copy/export), tech badges, SQL picker filter
+- `assets/js/app.js`: upload-only logic, metrics sanitation, dynamic intel/contexts, SQL detection & picker, export/copy helpers, resume parsing & role inference, PDF parsing
+- `assets/css/styles.css`: disabled state for tabs/buttons
+
+### Migration/Usage
+- Start on Upload tab, add your files (JD, resume, Q&A, metrics CSV, intel/playbook)
+- Click Process Files — all tabs and content will derive from your materials
+- Use Copy/Export to share metrics/brief/snapshot; SQL features activate only when SQL is detected
+
 ## Session: August 30, 2025
 
 ### Major Changes

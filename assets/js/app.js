@@ -3,6 +3,9 @@
             currentTab: 'upload',
             uploadedFiles: [],
             fileContents: {},
+            dataLoaded: false,
+            hasSQL: false,
+            sqlSnippets: [],
             extractedData: {
                 company: '',
                 role: '',
@@ -18,72 +21,43 @@
             }
         };
 
-        // Initialize metrics immediately on page load
-        function initializeMetrics() {
-            console.log('Initializing metrics on page load');
-            const metricsContainer = document.getElementById('keyMetrics');
-            if (metricsContainer) {
-                const defaultMetrics = getDefaultMetrics();
-                const colors = ['#4f46e5', '#22c55e', '#f59e0b', '#8b5cf6', '#0ea5e9', '#ec4899', '#14b8a6'];
-                
-                metricsContainer.innerHTML = defaultMetrics.map((metric, index) => {
-                    const bgColor = `linear-gradient(135deg, ${colors[index % colors.length]} 0%, ${colors[(index + 1) % colors.length]} 100%)`;
-                    return `
-                        <div class="metric-tile" style="background: ${bgColor};">
-                            <div style="font-size: 2rem; font-weight: 700; margin-bottom: 0.5rem; z-index: 2;">${metric.value}</div>
-                            ${metric.growth ? `<div style="font-size: 0.875rem; opacity: 0.9; margin-bottom: 0.5rem; z-index: 2;">${metric.growth}</div>` : ''}
-                            <div style="font-size: 0.875rem; font-weight: 600; margin-bottom: 0.25rem; z-index: 2;">${metric.label}</div>
-                            ${metric.context ? `<div style="font-size: 0.75rem; opacity: 0.8; z-index: 2;">${metric.context}</div>` : ''}
-                        </div>
-                    `;
-                }).join('');
-                
-                console.log('Metrics initialized successfully');
-            } else {
-                console.error('Metrics container not found');
-            }
-        }
+        // Metrics are not initialized on load; will render after file upload.
 
         // Initialize
 document.addEventListener('DOMContentLoaded', async function() {
             setupEventListeners();
             
-            // Initialize metrics immediately
-            setTimeout(initializeMetrics, 100);
-            
-            // Initialize countdown
-            initializeInterviewCountdown();
-            
-            // Try to load sample data automatically (single attempt)
-            console.log('🔄 Auto-loading sample data...');
-            try {
-                await loadSampleData();
-                console.log('✅ Sample data loaded successfully');
-            } catch (error) {
-                console.log('⚠️ Could not auto-load data:', error.message);
-                // Initialize with minimal state
-                appState.extractedData = {
-                    company: 'Google Play',
-                    role: 'BI Data Analyst', 
-                    questions: [],
-                    stories: [],
-                    panelists: [],
-                    metrics: getDefaultMetrics(),
-                    strengths: ['Advanced SQL & BigQuery optimization', 'Large-scale data processing'],
-                    gaps: ['Google Cloud Platform experience', 'Play Points domain knowledge'],
-                    companyIntel: 'Click "Load From input_files" to load your interview materials.',
-                    culturalNotes: 'Google Play cultural insights will load with your files.'
-                };
-                updateDashboard();
-                updateDataStatus('Dashboard ready. Click "Load From input_files" to load your materials.', 'info');
-            }
-            
+            // Disable tabs until data is uploaded
+            setTabsEnabled(false);
+            // Hide countdown until a JD file provides a date
+            const countdown = document.getElementById('interviewCountdown');
+            if (countdown) countdown.style.display = 'none';
+            updateDataStatus('Upload your materials to get started with personalized interview prep!', 'info');
             // PDF.js worker is configured when the library is lazy-loaded
-            // Removed duplicate auto-load of sample data to avoid double work
+            updateUploadChecklist();
+            updateRequiresDataVisibility();
+            updateSqlAvailabilityUI();
+            // Disable process button until files are selected
+            setProcessBtnEnabled(false);
+
+            // LLM toggle (optional). When deployed with /api/llm, this enables LLM assists.
+            window.__LLM_ENABLED__ = true;
+            // Optional: auto-load test files when ?test=1
+            try {
+                const params = new URLSearchParams(window.location.search || '');
+                if (params.get('test') === '1') {
+                    await loadTestFilesFromFolder();
+                }
+                // Debug toggle: ?debug=1 to show extraction details
+                if (params.get('debug') === '1') {
+                    window.__DEBUG__ = true;
+                    try { showToast('Debug mode enabled', 'info'); } catch (e) {}
+                }
+            } catch (e) { /* ignore */ }
         });
 
         async function initializeDashboard() {
-            // Don't auto-load sample data - let user choose to upload or load sample
+            // No auto-load; require user uploads
             updateDataStatus('Upload your materials to get started with personalized interview prep!', 'info');
         }
 
@@ -91,7 +65,16 @@ document.addEventListener('DOMContentLoaded', async function() {
             // Tab navigation
             document.querySelectorAll('.tab-btn').forEach(btn => {
                 btn.addEventListener('click', function() {
-                    switchTab(this.dataset.tab);
+                    const target = this.dataset.tab;
+                    if (!appState.dataLoaded && target !== 'upload') {
+                        showToast('Please upload your files to unlock tabs.', 'warning');
+                        return;
+                    }
+                    if (target === 'sql' && !appState.hasSQL) {
+                        showToast('Upload files containing SQL to enable SQL Practice.', 'warning');
+                        return;
+                    }
+                    switchTab(target);
                 });
             });
 
@@ -132,6 +115,10 @@ document.addEventListener('DOMContentLoaded', async function() {
             if (categorySelect) {
                 categorySelect.addEventListener('change', filterQuestions);
             }
+            const interviewerSelect = document.getElementById('interviewerFilter');
+            if (interviewerSelect) {
+                interviewerSelect.addEventListener('change', filterQuestions);
+            }
             // Global delegated click handlers
             document.addEventListener('click', (e) => {
                 const el = e.target.closest('[data-action]');
@@ -145,14 +132,26 @@ document.addEventListener('DOMContentLoaded', async function() {
                         closeMobileNav();
                         break;
                     case 'mobile-nav-switch':
-                        if (el.dataset.tab) switchTabMobile(el.dataset.tab);
+                        if (el.dataset.tab) {
+                            const target = el.dataset.tab;
+                            if (!appState.dataLoaded && target !== 'upload') {
+                                showToast('Please upload your files to unlock tabs.', 'warning');
+                                return;
+                            }
+                            if (target === 'sql' && !appState.hasSQL) {
+                                showToast('Upload files containing SQL to enable SQL Practice.', 'warning');
+                                return;
+                            }
+                            switchTabMobile(target);
+                        }
                         break;
                     case 'process-files':
                         processFiles();
                         break;
-                    case 'load-sample':
-                        loadSampleData();
+                    case 'load-test-files':
+                        loadTestFilesFromFolder();
                         break;
+                    // Sample loading disabled; require user uploads
                     case 'gen-power-intro':
                         generatePowerIntro();
                         break;
@@ -186,6 +185,37 @@ document.addEventListener('DOMContentLoaded', async function() {
                     case 'show-sql-examples':
                         showExampleSolutions();
                         break;
+                    case 'sql-load-snippet': {
+                        const idx = parseInt(el.dataset.index, 10);
+                        const editor = document.getElementById('sqlQuery');
+                        if (!isNaN(idx) && editor && appState.sqlSnippets && appState.sqlSnippets[idx]) {
+                            const sn = appState.sqlSnippets[idx];
+                            editor.value = sn.code;
+                            const note = document.getElementById('sqlSourceNote');
+                            if (note) note.textContent = `Source: ${(sn.source||'').split('/').pop()}`;
+                            showToast(`Loaded snippet from ${sn.source}`, 'success');
+                        }
+                        break;
+                    }
+                    case 'sql-copy-snippet': {
+                        const idx = parseInt(el.dataset.index, 10);
+                        if (!isNaN(idx) && appState.sqlSnippets && appState.sqlSnippets[idx]) {
+                            const sn = appState.sqlSnippets[idx];
+                            const text = sn.code;
+                            try {
+                                if (navigator.clipboard && navigator.clipboard.writeText) {
+                                    navigator.clipboard.writeText(text).then(()=>showToast('Snippet copied!', 'success'));
+                                } else {
+                                    const ta = document.createElement('textarea');
+                                    ta.value = text; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); document.body.removeChild(ta);
+                                    showToast('Snippet copied!', 'success');
+                                }
+                            } catch (e) {
+                                showToast('Copy failed', 'error');
+                            }
+                        }
+                        break;
+                    }
                     case 'gen-rebuttal':
                         generateRebuttal();
                         break;
@@ -195,6 +225,71 @@ document.addEventListener('DOMContentLoaded', async function() {
                     case 'gen-plan':
                         generatePlan();
                         break;
+                    case 'copy-metrics': {
+                        const metrics = Array.isArray(appState.extractedData.metrics) ? appState.extractedData.metrics : [];
+                        if (!metrics.length) { showToast('No metrics to copy', 'warning'); break; }
+                        const md = metrics.map(m => `- ${m.label}: ${m.value}${m.growth?` (${m.growth})`:''}${m.context?` — ${m.context}`:''}`).join('\n');
+                        try {
+                            if (navigator.clipboard && navigator.clipboard.writeText) {
+                                navigator.clipboard.writeText(md).then(()=>showToast('Metrics copied!', 'success'));
+                            } else {
+                                const ta = document.createElement('textarea'); ta.value = md; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); document.body.removeChild(ta); showToast('Metrics copied!', 'success');
+                            }
+                        } catch (err) { showToast('Copy failed', 'error'); }
+                        break;
+                    }
+                    case 'copy-briefing': {
+                        const md = appState.extractedData.companyIntel || '';
+                        if (!md) { showToast('No briefing to copy', 'warning'); break; }
+                        try {
+                            if (navigator.clipboard && navigator.clipboard.writeText) {
+                                navigator.clipboard.writeText(md).then(()=>showToast('Briefing copied!', 'success'));
+                            } else {
+                                const ta = document.createElement('textarea'); ta.value = md; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); document.body.removeChild(ta); showToast('Briefing copied!', 'success');
+                            }
+                        } catch (err) { showToast('Copy failed', 'error'); }
+                        break;
+                    }
+                    case 'download-briefing': {
+                        const md = appState.extractedData.companyIntel || '';
+                        if (!md) { showToast('No briefing to download', 'warning'); break; }
+                        const blob = new Blob([md], { type: 'text/markdown;charset=utf-8' });
+                        const url = URL.createObjectURL(blob);
+                        const a = document.createElement('a');
+                        a.href = url; a.download = 'briefing.md';
+                        document.body.appendChild(a); a.click(); document.body.removeChild(a);
+                        URL.revokeObjectURL(url);
+                        showToast('Briefing downloaded', 'success');
+                        break;
+                    }
+                    case 'download-snapshot': {
+                        const md = buildSnapshotMarkdown();
+                        if (!md) { showToast('Nothing to export yet', 'warning'); break; }
+                        const blob = new Blob([md], { type: 'text/markdown;charset=utf-8' });
+                        const url = URL.createObjectURL(blob);
+                        const a = document.createElement('a');
+                        a.href = url; a.download = 'dashboard_snapshot.md';
+                        document.body.appendChild(a); a.click(); document.body.removeChild(a);
+                        URL.revokeObjectURL(url);
+                        showToast('Snapshot downloaded', 'success');
+                        break;
+                    }
+                    case 'copy-snapshot': {
+                        const md = buildSnapshotMarkdown();
+                        if (!md) { showToast('Nothing to copy yet', 'warning'); break; }
+                        try {
+                            if (navigator.clipboard && navigator.clipboard.writeText) {
+                                navigator.clipboard.writeText(md).then(()=>showToast('Snapshot copied!', 'success'));
+                            } else {
+                                const ta = document.createElement('textarea'); ta.value = md; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); document.body.removeChild(ta); showToast('Snapshot copied!', 'success');
+                            }
+                        } catch (err) { showToast('Copy failed', 'error'); }
+                        break;
+                    }
+                    case 'gen-quick-tips': {
+                        updateQuickTipsFromData();
+                        break;
+                    }
                     case 'set-quick-question':
                         if (el.dataset.question) setQuickQuestion(el.dataset.question);
                         break;
@@ -275,15 +370,601 @@ GROUP BY previous_tier, current_tier;`;
 
         function updateDataStatus(message, type = 'info') {
             const statusDiv = document.getElementById('dataStatus');
-            if (statusDiv) {
-                const colors = {
-                    success: '#22c55e',
-                    error: '#ef4444',
-                    warning: '#f59e0b',
-                    info: '#64748b'
-                };
-                statusDiv.innerHTML = `<p style="color: ${colors[type]};">${message}</p>`;
+            if (!statusDiv) return;
+            const colors = { success:'#22c55e', error:'#ef4444', warning:'#f59e0b', info:'#64748b' };
+            const s = appState.uploadStatus || {};
+            const d = appState.extractedData || {};
+            const pills = [
+                { label:'Resume', ok: !!s.hasResume },
+                { label:'Job Description', ok: !!s.hasJD },
+                { label:'Company Intel', ok: !!s.hasIntel },
+                { label:'Additional Resources', ok: !!s.hasResources }
+            ].map(p => `<span style="display:inline-block;margin:0 .5rem .5rem 0;padding:.25rem .5rem;border-radius:9999px;background:${p.ok?'#dcfce7':'#fee2e2'};color:${p.ok?'#166534':'#991b1b'};font-size:.75rem;transition:all .25s ease;">${p.ok?'✓':'✗'} ${p.label}</span>`).join('');
+            const counts = [
+                { k:'Panelists', v:(d.panelists||[]).length },
+                { k:'Questions', v:(d.questions||[]).length },
+                { k:'Stories', v:(d.stories||[]).length },
+                { k:'Metrics', v:(d.metrics||[]).length },
+                { k:'SQL Snippets', v:(appState.sqlSnippets||[]).length }
+            ].map(c => `<div style="padding:.35rem .6rem;border-radius:.375rem;background:#f8fafc;">${c.k}: <strong>${c.v}</strong></div>`).join('');
+            const header = message ? `<p style="color:${colors[type]}; margin-bottom:.5rem;">${message}</p>` : '';
+            statusDiv.innerHTML = `${header}<div style="margin-bottom:.5rem;">${pills}</div><div style="display:flex;gap:.5rem;flex-wrap:wrap;">${counts}</div>`;
+            try { statusDiv.animate([{opacity:.6},{opacity:1}], {duration:250,easing:'ease'}); } catch(e) {}
+        }
+
+        function setProcessBtnEnabled(enabled) {
+            const btn = document.querySelector('[data-action="process-files"]');
+            if (!btn) return;
+            btn.disabled = !enabled;
+            try { btn.animate([{opacity:0.9},{opacity:1}], {duration:180,easing:'ease'}); } catch(e) {}
+        }
+
+        function setTabsEnabled(enabled) {
+            const buttons = document.querySelectorAll('.tab-btn');
+            buttons.forEach(btn => {
+                const tab = btn.dataset.tab;
+                if (tab === 'upload') return;
+                if (tab === 'sql' && !appState.hasSQL) {
+                    btn.classList.add('disabled');
+                    return;
+                }
+                if (enabled) {
+                    btn.classList.remove('disabled');
+                } else {
+                    btn.classList.add('disabled');
+                }
+            });
+        }
+
+        function containsSQL(text) {
+            if (!text) return false;
+            const s = String(text);
+            const patterns = [
+                /\bSELECT\b[\s\S]*?\bFROM\b/i,
+                /\bWITH\b\s+\w+\s+AS\s*\(/i,
+                /\bJOIN\b\s+\w+/i,
+                /\bGROUP\s+BY\b/i,
+                /\bORDER\s+BY\b/i,
+                /\bCREATE\s+(TABLE|VIEW)\b/i,
+                /\bINSERT\s+INTO\b/i,
+                /\bWINDOW\b|\bOVER\s*\(/i,
+                /\bROW_NUMBER\s*\(/i
+            ];
+            return patterns.some(rx => rx.test(s));
+        }
+
+        function detectSQLInFiles() {
+            const combined = Object.values(appState.fileContents || {}).join('\n');
+            appState.hasSQL = containsSQL(combined);
+        }
+
+        function updateSqlAvailabilityUI() {
+            const showSQL = !!appState.hasSQL;
+            const tabBtn = document.querySelector('.tab-btn[data-tab="sql"]');
+            const mobileItem = document.querySelector('.mobile-nav-item[data-tab="sql"]');
+            const tabContent = document.getElementById('sql');
+            if (tabBtn) tabBtn.style.display = showSQL ? '' : 'none';
+            if (mobileItem) mobileItem.style.display = showSQL ? '' : 'none';
+            if (!showSQL) {
+                // If currently on SQL tab, redirect to upload
+                const currentActive = document.querySelector('.tab-content.active');
+                if (currentActive && currentActive.id === 'sql') {
+                    switchTab('upload');
+                }
             }
+        }
+
+        function extractSQLBlocksFromMarkdown(text) {
+            const blocks = [];
+            if (!text) return blocks;
+            // ```sql ... ``` fenced blocks
+            const reSql = /```sql\s*([\s\S]*?)```/gi;
+            let m;
+            while ((m = reSql.exec(text)) !== null) {
+                const code = (m[1] || '').trim();
+                if (code) blocks.push(code);
+            }
+            // Generic fenced blocks; include only if they look like SQL
+            const reAny = /```\s*([\s\S]*?)```/g;
+            while ((m = reAny.exec(text)) !== null) {
+                const code = (m[1] || '').trim();
+                if (code && containsSQL(code)) blocks.push(code);
+            }
+            return blocks;
+        }
+
+        function extractInlineSQLHeuristics(text) {
+            const blocks = [];
+            if (!text) return blocks;
+            // Capture sequences starting with SELECT or WITH up to a semicolon or double newline
+            const re = /(SELECT[\s\S]*?;)|(WITH\s+[\s\S]*?;)/gi;
+            let m;
+            while ((m = re.exec(text)) !== null) {
+                const code = (m[0] || '').trim();
+                if (code && containsSQL(code)) blocks.push(code);
+            }
+            // If none found, try shorter chunks ending at blank line
+            if (blocks.length === 0) {
+                const re2 = /(SELECT|WITH)[\s\S]*?(?:\n\s*\n|$)/gi;
+                let m2;
+                while ((m2 = re2.exec(text)) !== null) {
+                    const code = (m2[0] || '').trim();
+                    if (code && containsSQL(code)) blocks.push(code);
+                }
+            }
+            return blocks;
+        }
+
+        function collectSQLSnippetsFromFiles() {
+            const snippets = [];
+            for (const [name, content] of Object.entries(appState.fileContents || {})) {
+                if (!content) continue;
+                const lower = name.toLowerCase();
+                let blocks = [];
+                if (lower.endsWith('.md') || /markdown/i.test(content.slice(0, 200))) {
+                    blocks = extractSQLBlocksFromMarkdown(content);
+                }
+                // Heuristic extraction from any text file
+                if (blocks.length === 0) {
+                    blocks = extractInlineSQLHeuristics(content);
+                }
+                blocks.forEach(code => snippets.push({ source: name, code }));
+            }
+            // De-duplicate by code content
+            const seen = new Set();
+            const unique = [];
+            for (const snip of snippets) {
+                const key = snip.code.replace(/\s+/g, ' ').trim();
+                if (!seen.has(key)) { seen.add(key); unique.push(snip); }
+            }
+            appState.sqlSnippets = unique;
+        }
+
+        function populateSQLEditorFromSnippets() {
+            const editor = document.getElementById('sqlQuery');
+            if (!editor) return;
+            if (!Array.isArray(appState.sqlSnippets) || appState.sqlSnippets.length === 0) return;
+            // Choose the longest snippet assuming it's the most complete
+            const best = appState.sqlSnippets.reduce((a, b) => (b.code.length > a.code.length ? b : a));
+            editor.value = best.code;
+            try { showToast(`Loaded SQL from ${best.source}`, 'success'); } catch (e) { /* ignore */ }
+        }
+
+        function updateSqlSnippetList() {
+            const container = document.getElementById('sqlSnippetList');
+            if (!container) return;
+            const snippets = Array.isArray(appState.sqlSnippets) ? appState.sqlSnippets : [];
+            const filterSel = document.getElementById('sqlSnippetFilter');
+            const listDiv = document.getElementById('sqlSnippetItems');
+            if (!listDiv) return;
+            if (!snippets.length) {
+                listDiv.innerHTML = '<p style="color:#64748b; font-size: 0.9rem;">No SQL snippets detected. Include ```sql fenced blocks or queries starting with SELECT/WITH in your files.</p>';
+                if (filterSel) filterSel.innerHTML = '';
+                return;
+            }
+            // Populate filter options
+            if (filterSel) {
+                const sources = Array.from(new Set(snippets.map(s => (s.source || '').split('/').pop())));
+                const current = filterSel.value || '';
+                filterSel.innerHTML = ['<option value="">All files</option>']
+                    .concat(sources.map(s => `<option value="${s}">${s}</option>`)).join('');
+                if (current) filterSel.value = current;
+            }
+            const selected = (filterSel && filterSel.value) ? filterSel.value : '';
+            const filtered = selected ? snippets.filter(s => ((s.source || '').split('/').pop()) === selected) : snippets;
+            const items = filtered.map((snip, idx) => {
+                const firstLine = (snip.code.split('\n')[0] || '').replace(/`/g,'').trim();
+                const label = firstLine.slice(0, 60) + (firstLine.length > 60 ? '…' : '');
+                const source = (snip.source || '').split('/').pop();
+                return `
+                    <div class="sql-snippet-item" style="border:1px solid #e2e8f0; border-radius:0.5rem; padding:0.5rem 0.75rem; margin:0.25rem 0; display:flex; justify-content:space-between; align-items:center; gap:0.5rem;">
+                        <div data-action="sql-load-snippet" data-index="${idx}" style="flex:1; font-family: 'Courier New', monospace; font-size: 0.85rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor:pointer;">${label}</div>
+                        <div style="display:flex; align-items:center; gap:0.5rem;">
+                            <span style="font-size:0.75rem; color:#64748b;">${source}</span>
+                            <button class="btn btn-secondary" data-action="sql-copy-snippet" data-index="${idx}" title="Copy to clipboard" style="padding:0.35rem 0.6rem;">Copy</button>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+            listDiv.innerHTML = items;
+            // Wire filter change
+            if (filterSel && !filterSel._wired) {
+                filterSel.addEventListener('change', () => updateSqlSnippetList());
+                filterSel._wired = true;
+            }
+        }
+
+        function buildSnapshotMarkdown() {
+            const d = appState.extractedData || {};
+            const title = `# Interview Prep Snapshot${(d.company||d.role)?` — ${[d.company,d.role].filter(Boolean).join(' | ')}`:''}`;
+            const tech = deriveTechStack(getCombinedContent());
+            const techMd = tech.length ? tech.map(t=>`- ${t}`).join('\n') : '- (detected from your files)';
+            const metrics = Array.isArray(d.metrics)?d.metrics:[];
+            const metricsMd = metrics.length ? metrics.map(m=>`- ${m.label}: ${m.value}${m.growth?` (${m.growth})`:''}${m.context?` — ${m.context}`:''}`).join('\n') : '- (provide metrics via CSV or docs)';
+            const strengths = Array.isArray(d.strengths)?d.strengths:[];
+            const gaps = Array.isArray(d.gaps)?d.gaps:[];
+            const strengthsMd = strengths.length ? strengths.map(s=>`- ${s}`).join('\n') : '- (no strengths extracted)';
+            const gapsMd = gaps.length ? gaps.map(g=>`- ${g}`).join('\n') : '- (no gaps extracted)';
+            const panelists = Array.isArray(d.panelists)?d.panelists:[];
+            const panelistsMd = panelists.length ? panelists.map(p=>`- ${p.name||''}${p.role?` — ${p.role}`:''}${p.archetype?` (${p.archetype})`:''}`).join('\n') : '- (no panelists extracted)';
+            const questions = Array.isArray(d.questions)?d.questions:[];
+            const qMd = questions.slice(0,10).map(q=>`- [${q.category||'general'}] ${q.question}`).join('\n') || '- (no questions extracted)';
+            const snippets = Array.isArray(appState.sqlSnippets)?appState.sqlSnippets:[];
+            const snMd = snippets.slice(0,5).map(s=>`- ${((s.code||'').split('\n')[0]||'').trim()} — ${((s.source||'').split('/').pop())}`).join('\n') || '- (no SQL detected)';
+            const intel = typeof d.companyIntel === 'string' ? d.companyIntel : '';
+
+            return [
+                title,
+                '\n## Tech Stack',
+                techMd,
+                '\n## Key Metrics',
+                metricsMd,
+                '\n## Strengths',
+                strengthsMd,
+                '\n## Potential Gaps',
+                gapsMd,
+                '\n## Panelists',
+                panelistsMd,
+                '\n## Q&A Highlights',
+                qMd,
+                '\n## SQL Snippets',
+                snMd,
+                '\n## Executive Brief',
+                intel || '_Upload company intel or playbook files to generate a briefing._'
+            ].join('\n');
+        }
+
+        function updateUploadChecklist() {
+            const files = Object.keys(appState.fileContents || {});
+            const hasResume = files.some(n => /resume/i.test(n));
+            const hasJD = files.some(n => /jd|job\s*description/i.test(n));
+            const hasIntel = files.some(n => /intel|playbook|strategy|brief|company/i.test(n));
+            // Additional resources: anything uploaded besides resume/JD/intel
+            const known = (n) => /resume/i.test(n) || /jd|job\s*description/i.test(n) || /intel|playbook|strategy|brief|company/i.test(n);
+            const hasResources = files.some(n => !known(n));
+
+            function setCheck(id, ok, type) {
+                const el = document.getElementById(id);
+                if (!el) return;
+                el.style.transition = 'all .25s ease';
+                if (id === 'check-resume') {
+                    el.style.borderLeftColor = '#0ea5e9';
+                    el.style.background = '#eff6ff';
+                    el.style.boxShadow = ok ? '0 0 0 3px rgba(14,165,233,0.18)' : 'none';
+                } else if (id === 'check-intel') {
+                    el.style.borderLeftColor = '#eab308';
+                    el.style.background = '#fefce8';
+                    el.style.boxShadow = ok ? '0 0 0 3px rgba(234,179,8,0.18)' : 'none';
+                } else if (id === 'check-jd') {
+                    el.style.borderLeftColor = '#ef4444';
+                    el.style.background = '#fff7ed';
+                    el.style.boxShadow = ok ? '0 0 0 3px rgba(34,197,94,0.15)' : 'none';
+                } else { // resources
+                    el.style.borderLeftColor = '#22c55e';
+                    el.style.background = '#f0fdf4';
+                    el.style.boxShadow = ok ? '0 0 0 3px rgba(34,197,94,0.15)' : 'none';
+                }
+                try { el.animate([{transform:'scale(1)'},{transform:'scale(1.01)'},{transform:'scale(1)'}], {duration:250, easing:'ease'}); } catch(e) {}
+            }
+
+            setCheck('check-resume', hasResume, 'required');
+            setCheck('check-jd', hasJD, 'required');
+            setCheck('check-intel', hasIntel, 'intel');
+            setCheck('check-resources', hasResources, 'resources');
+        }
+
+        function updateRequiresDataVisibility() {
+            const hasQuestions = Array.isArray(appState.extractedData.questions) && appState.extractedData.questions.length > 0;
+            const hasIntel = !!appState.extractedData.companyIntel;
+            const hasMetrics = Array.isArray(appState.extractedData.metrics) && appState.extractedData.metrics.length > 0;
+            const hasSQL = !!appState.hasSQL;
+            const hasStrengths = Array.isArray(appState.extractedData.strengths) && appState.extractedData.strengths.length > 0;
+            const hasGaps = Array.isArray(appState.extractedData.gaps) && appState.extractedData.gaps.length > 0;
+
+            function show(id, should) {
+                const el = document.getElementById(id);
+                if (!el) return;
+                el.style.display = should ? '' : 'none';
+            }
+
+            // Show interview context if we have any signals (populated dynamically)
+            const hasPanelists = Array.isArray(appState.extractedData.panelists) && appState.extractedData.panelists.length > 0;
+            show('interviewContextBar', appState.dataLoaded && (hasQuestions || hasIntel || hasPanelists || hasMetrics || hasStrengths));
+
+            // SQL practice only if explicit SQL was found
+            show('sqlContextCard', hasSQL);
+            show('sqlChallengesCard', hasSQL);
+            // Schema/scenarios get toggled based on derived content flags
+            const schemaCard = document.getElementById('schemaCard');
+            const scenariosCard = document.getElementById('scenariosCard');
+            if (schemaCard) schemaCard.style.display = schemaCard.dataset.hascontent === 'true' ? '' : 'none';
+            if (scenariosCard) scenariosCard.style.display = scenariosCard.dataset.hascontent === 'true' ? '' : 'none';
+
+            // Keep quick tips hidden until we generate from data
+            show('quickTipsCard', false);
+
+            // Upload tab derived sections
+            show('powerIntroCard', appState.dataLoaded);
+            show('talkingPointsCard', appState.dataLoaded);
+            show('strengthsCard', hasStrengths);
+            show('gapsCard', hasGaps);
+        }
+
+        // -------- Dynamic Section Builders (agnostic) --------
+        function getCombinedContent() {
+            return Object.values(appState.fileContents || {}).join('\n');
+        }
+
+        function deriveTechStack(text) {
+            const terms = [
+                'SQL','BigQuery','Snowflake','Redshift','PostgreSQL','MySQL','SQLite','Oracle','PL/SQL',
+                'Python','Pandas','NumPy','R','Spark','Airflow',
+                'Tableau','Looker','Power BI','PLX','dbt',
+                'GCP','Google Cloud','AWS','Azure','Databricks'
+            ];
+            const found = [];
+            const lower = (text || '').toLowerCase();
+            terms.forEach(t => { if (lower.includes(t.toLowerCase())) found.push(t); });
+            return Array.from(new Set(found));
+        }
+
+        // Infer company and role from raw text content
+        function inferCompanyAndRoleFromText(text) {
+            const out = { company: '', role: '' };
+            if (!text) return out;
+            try {
+                const t = String(text).replace(/[\u2013\u2014]/g, '-');
+                // Prefer explicit labels, even without newlines
+                let m = t.match(/Company(?:\s*Name)?\s*[:\-–—]\s*([A-Z][A-Za-z0-9&().,'\-\s]{2,80})/i);
+                if (m) out.company = (m[1] || '').trim();
+                if (!out.company) {
+                    m = t.match(/Employer\s*[:\-–—]\s*([A-Z][A-Za-z0-9&().,'\-\s]{2,80})/i);
+                    if (m) out.company = (m[1] || '').trim();
+                }
+
+                // Role/Title extraction
+                m = t.match(/(?:Job\s*Title|Title|Position|Role)\s*[:\-–—]\s*([^\n]{2,80})/i);
+                if (m) out.role = (m[1] || '').trim();
+                if (!out.role) {
+                    const titleRx = /((Senior|Lead|Principal|Staff)\s+)?(BI|Business\s*Intelligence|Data|Analytics)\s+(Analyst|Engineer|Scientist|Manager|Architect)/i;
+                    const m2 = t.match(titleRx);
+                    if (m2) out.role = (m2[0] || '').trim();
+                }
+            } catch (e) { /* ignore */ }
+            return out;
+        }
+
+        // Infer company and role from filenames (e.g., "JD - Acme Corp - Data Analyst.pdf")
+        function inferCompanyAndRoleFromFilenames(files) {
+            const out = { company: '', role: '' };
+            if (!Array.isArray(files)) return out;
+            for (const f of files) {
+                const base = String(f || '').split(/[\\\/]/).pop().replace(/\.[^.]+$/, '');
+                if (/\bJD\b/i.test(base) || /job\s*description/i.test(base)) {
+                    // Remove anything before JD
+                    let s = base.replace(/^.*?\b(JD|Job\s*Description)\b\s*[-–:]?\s*/i, '');
+                    const parts = s.split(/\s*[-–]\s*/);
+                    if (parts.length >= 2) {
+                        if (!out.company) out.company = parts[0].trim();
+                        if (!out.role) out.role = parts.slice(1).join(' - ').trim();
+                    }
+                }
+                // Resume pattern like "ICT - Brandon Abbott Resume"
+                if (!out.company && /resume/i.test(base)) {
+                    const m = base.match(/^(.+?)\s*[-–]/);
+                    if (m) out.company = (m[1] || '').trim();
+                }
+                if (out.company && out.role) break;
+            }
+            return out;
+        }
+
+        function extractTablesFromSQLSnippets() {
+            const tables = new Set();
+            const snippets = appState.sqlSnippets || [];
+            const rx = /\b(?:FROM|JOIN)\s+([`\[]?[\w.]+[`\]]?)/gi;
+            for (const snip of snippets) {
+                let m;
+                while ((m = rx.exec(snip.code)) !== null) {
+                    let t = m[1].replace(/[`\[\]]/g,'');
+                    tables.add(t);
+                }
+            }
+            return Array.from(tables).slice(0, 20);
+        }
+
+        function updateInterviewContext() {
+            const el = document.getElementById('interviewContextBar');
+            if (!el) return;
+            const text = getCombinedContent();
+            const tech = deriveTechStack(text);
+            const metrics = appState.extractedData.metrics || [];
+            const panelists = appState.extractedData.panelists || [];
+
+            const focus = [];
+            if (tech.includes('SQL')) focus.push('SQL depth');
+            if (tech.includes('BigQuery')) focus.push('BigQuery optimization');
+            if (/segmentation|cluster/i.test(text)) focus.push('Segmentation');
+            if (/retention|churn/i.test(text)) focus.push('Retention/Churn');
+            if (/pipeline|etl|elt/i.test(text)) focus.push('Data pipelines');
+
+            const business = [];
+            const m1 = metrics.find(m => /users|members|customers/i.test(m.label));
+            const m2 = metrics.find(m => /revenue|sales|impact/i.test(m.label));
+            if (m1) business.push(`${m1.value} ${m1.label}`);
+            if (m2) business.push(`${m2.value} ${m2.label}`);
+
+            const interviewerHtml = panelists.slice(0,3).map(p => `• <strong>${p.name || ''}</strong>${p.role?': '+p.role:''}`).join('<br>');
+
+            el.innerHTML = `
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 1rem;">
+                    <div>
+                        <strong>🎯 Key Focus Areas:</strong><br>
+                        ${focus.length ? focus.map(f=>`• ${f}`).join('<br>') : '• Derived from your materials'}
+                    </div>
+                    <div>
+                        <strong>📊 Business Context:</strong><br>
+                        ${business.length ? business.map(b=>`• ${b}`).join('<br>') : '• Metrics will appear when detected'}
+                    </div>
+                    <div>
+                        <strong>👥 Interviewers:</strong><br>
+                        ${interviewerHtml || '• Add panelists via your files'}
+                    </div>
+                </div>`;
+        }
+
+        function updateSQLContextCard() {
+            const card = document.getElementById('sqlContextCard');
+            if (!card) return;
+            if (!appState.hasSQL) { card.style.display = 'none'; return; }
+            const text = getCombinedContent();
+            const metrics = appState.extractedData.metrics || [];
+            const gaps = appState.extractedData.gaps || [];
+            const panelists = appState.extractedData.panelists || [];
+            const tech = deriveTechStack(text).slice(0,6);
+            const focus = [];
+            if (tech.includes('SQL')) focus.push('SQL depth');
+            if (tech.includes('BigQuery')) focus.push('BigQuery optimization');
+            if (/segmentation|cluster/i.test(text)) focus.push('Segmentation');
+            if (/retention|churn/i.test(text)) focus.push('Retention/Churn');
+            if (/pipeline|etl|elt/i.test(text)) focus.push('Pipelines');
+
+            const scaleMetric = metrics.find(m => /users|members|customers|records|rows/i.test(m.label));
+            const scaleText = scaleMetric ? `${scaleMetric.value} ${scaleMetric.label}` : '—';
+            let queryVol = '—';
+            const volMatch = text.match(/(\d+(?:\.\d+)?\s*(?:B|M|K)\+?)\s+(queries|transactions|events|rows|records)/i);
+            if (volMatch) queryVol = `${volMatch[1]} ${volMatch[2]}`;
+            const challenge = gaps[0] || (focus[0] || '—');
+            const interviewers = panelists.slice(0,3).map(p => p.name).filter(Boolean).join(', ') || '—';
+
+            // Rewrite the inner grid content while preserving title
+            const titleEl = card.querySelector('h3');
+            if (titleEl) titleEl.textContent = '🎯 Interview Focus';
+            const grid = card.querySelector('div[style*="grid-template-columns"]');
+            if (grid) {
+                grid.innerHTML = `
+                    <div>
+                        <strong>Data Scale:</strong> ${scaleText}
+                        <br><strong>Query Volume:</strong> ${queryVol}
+                        <br><strong>Key Challenge:</strong> ${challenge}
+                    </div>
+                    <div>
+                        <strong>Tech Stack:</strong> ${tech.length?tech.join(', '):'—'}<br>
+                        <strong>Focus Areas:</strong> ${focus.length?focus.join(', '):'—'}<br>
+                        <strong>Interviewers:</strong> ${interviewers}
+                    </div>`;
+            }
+            card.style.display = '';
+        }
+
+        function updateSchemaCard() {
+            const card = document.getElementById('schemaCard');
+            if (!card) return;
+            const tables = extractTablesFromSQLSnippets();
+            if (!tables.length) { card.dataset.hascontent = 'false'; return; }
+            const container = card.querySelector('div');
+            if (container) {
+                container.innerHTML = `<div style=\"color:#10b981; margin-bottom:0.5rem;\">-- Detected Tables</div>` +
+                    tables.map(t=>`<div style=\"color:#f1f5f9;\"><strong style=\"color:#3b82f6;\">${t}</strong></div>`).join('');
+            }
+            card.dataset.hascontent = 'true';
+        }
+
+        function updateScenariosCard() {
+            const card = document.getElementById('scenariosCard');
+            if (!card) return;
+            const text = getCombinedContent();
+            const scenarios = [];
+            if (/churn|retention/i.test(text)) scenarios.push({id:'retention', label:'Retention/Churn Analysis'});
+            if (/segment|cluster/i.test(text)) scenarios.push({id:'segmentation', label:'Customer Segmentation'});
+            if (/optimi[sz]e|performance|cost/i.test(text)) scenarios.push({id:'optimization', label:'Query/Cost Optimization'});
+            if (/pipeline|etl|elt/i.test(text)) scenarios.push({id:'pipeline', label:'Pipeline Reliability'});
+            const listContainers = card.querySelectorAll('div');
+            const listContainer = listContainers && listContainers[1] ? listContainers[1] : card;
+            if (scenarios.length && listContainer) {
+                listContainer.innerHTML = scenarios.map(s => `
+                    <button class=\"btn\" style=\"background:#0ea5e9; color:white; text-align:left; padding:0.75rem;\" data-action=\"load-sql-scenario\" data-scenario=\"${s.id}\">
+                        <strong>${s.label}</strong>
+                    </button>`).join('');
+                card.dataset.hascontent = 'true';
+            } else {
+                card.dataset.hascontent = 'false';
+            }
+        }
+
+        function updateTechBadges() {
+            const wrap = document.getElementById('detectedTech');
+            if (!wrap) return;
+            const tech = deriveTechStack(getCombinedContent());
+            if (!tech.length) { wrap.innerHTML = ''; return; }
+            wrap.innerHTML = tech.map(t => `<span style="display:inline-block; padding:0.25rem 0.5rem; background:#f1f5f9; border:1px solid #e2e8f0; border-radius:9999px; font-size:0.75rem;">${t}</span>`).join(' ');
+        }
+
+        function updateQuickTipsFromData() {
+            const card = document.getElementById('quickTipsCard');
+            if (!card) return;
+            if (!appState.dataLoaded) { card.style.display = 'none'; return; }
+            const strengths = appState.extractedData.strengths || [];
+            const gaps = appState.extractedData.gaps || [];
+            const tech = deriveTechStack(getCombinedContent());
+            const doTips = [];
+            const avoidTips = [];
+            if (strengths.length) doTips.push('Quantify results with concrete metrics');
+            if (tech.length) doTips.push(`Reference your stack: ${tech.slice(0,4).join(', ')}`);
+            doTips.push('Use STAR for behavioral answers');
+            doTips.push('Tie answers to business impact');
+            doTips.push('Validate cost and performance trade-offs');
+            if (gaps.length) {
+                avoidTips.push('Over-claiming beyond your experience');
+                avoidTips.push('Ignoring mitigation steps for gaps');
+            }
+            avoidTips.push('Generic answers without concrete examples');
+            avoidTips.push('Tool name-dropping without outcomes');
+
+            // Rebuild inner content of quick tips card
+            const sections = `
+                <div class="grid grid-2">
+                    <div style="background:#f0fdf4; padding:1rem; border-radius:0.5rem;">
+                        <h4 style="color:#22c55e; margin-bottom:0.5rem;">✅ Do This</h4>
+                        <ul style="margin:0; padding-left:1rem; font-size:0.875rem;">
+                            ${doTips.map(x=>`<li>${x}</li>`).join('')}
+                        </ul>
+                    </div>
+                    <div style="background:#fef3c7; padding:1rem; border-radius:0.5rem;">
+                        <h4 style="color:#f59e0b; margin-bottom:0.5rem;">⚠️ Avoid This</h4>
+                        <ul style="margin:0; padding-left:1rem; font-size:0.875rem;">
+                            ${avoidTips.map(x=>`<li>${x}</li>`).join('')}
+                        </ul>
+                    </div>
+                </div>`;
+            // Keep existing title, replace the content section below title
+            const titleH3 = card.querySelector('h3');
+            card.innerHTML = '';
+            if (titleH3) card.appendChild(titleH3);
+            const contentDiv = document.createElement('div');
+            contentDiv.innerHTML = sections;
+            card.appendChild(contentDiv);
+            card.style.display = '';
+        }
+
+        // Build a company intel markdown summary from uploaded content
+        function extractCompanyIntelAgnostic(content) {
+            const company = cleanCompanyDisplayName(appState.extractedData.company || '') || '';
+            const role = cleanRoleTitle(appState.extractedData.role || '') || '';
+            const tech = deriveTechStack(content);
+            const strengths = appState.extractedData.strengths || [];
+            const gaps = appState.extractedData.gaps || [];
+            const metrics = appState.extractedData.metrics || [];
+
+            const metricsMd = metrics.slice(0,8).map(m => `- ${m.label}: ${m.value}${m.growth?` (${m.growth})`:''}${m.context?` — ${m.context}`:''}`).join('\n') || '- Add a metrics CSV or include metrics in your docs';
+            const strengthsMd = strengths.slice(0,6).map(s=>`- ${s}`).join('\n') || '- Add strengths in your materials to populate';
+            const gapsMd = gaps.slice(0,5).map(g=>`- ${g}`).join('\n') || '- Add areas to improve to populate';
+
+            const md = `## Executive Brief\n\n**Company:** ${company || '—'}  \\
+**Role:** ${role || '—'}\n\n### Detected Tech Stack\n${tech.length ? tech.map(t=>`- ${t}`).join('\n') : '- Tech signals will appear when detected'}\n\n### Key Metrics\n${metricsMd}\n\n### Strengths\n${strengthsMd}\n\n### Potential Gaps\n${gapsMd}`;
+
+            appState.extractedData.companyIntel = md;
+            appState.extractedData.companyIntelSource = 'Uploaded Materials';
         }
 
         // Small helper to render a consistent AI badge in templates
@@ -388,29 +1069,78 @@ GROUP BY previous_tier, current_tier;`;
                 fileItem.appendChild(fileInfo);
                 fileList.appendChild(fileItem);
             });
+            // Enable process button if files selected
+            setProcessBtnEnabled(appState.uploadedFiles.length > 0);
         }
 
         async function readFileContent(file) {
             return new Promise((resolve, reject) => {
                 const reader = new FileReader();
-                reader.onload = (e) => resolve(e.target.result);
                 reader.onerror = reject;
-                reader.readAsText(file);
+                const name = (file.name || '').toLowerCase();
+                if (name.endsWith('.docx')) {
+                    reader.onload = async (e) => {
+                        try {
+                            await ensureMammoth();
+                            const buf = e.target.result;
+                            if (window.mammoth && mammoth.extractRawText) {
+                                const { value } = await mammoth.extractRawText({ arrayBuffer: buf });
+                                resolve(value || '');
+                            } else {
+                                resolve('');
+                            }
+                        } catch (err) {
+                            resolve('');
+                        }
+                    };
+                    reader.readAsArrayBuffer(file);
+                } else if (name.endsWith('.pdf')) {
+                    reader.onload = async (e) => {
+                        try {
+                            await ensurePdfJs();
+                            if (!window.pdfjsLib) { resolve(''); return; }
+                            const buf = e.target.result;
+                            const doc = await pdfjsLib.getDocument({ data: buf }).promise;
+                            let text = '';
+                            for (let i = 1; i <= doc.numPages; i++) {
+                                const page = await doc.getPage(i);
+                                const content = await page.getTextContent();
+                                text += '\n' + content.items.map(it => it.str).join(' ');
+                            }
+                            resolve(text);
+                        } catch (err) {
+                            resolve('');
+                        }
+                    };
+                    reader.readAsArrayBuffer(file);
+                } else {
+                    reader.onload = (e) => resolve(e.target.result);
+                    reader.readAsText(file);
+                }
             });
         }
 
         async function processFiles() {
             const processBtn = document.querySelector('#processBtnText');
+            const processBtnEl = document.querySelector('[data-action="process-files"]');
+            if (!appState.uploadedFiles || appState.uploadedFiles.length === 0) {
+                updateDataStatus('No files selected. Please add files to process.', 'warning');
+                showToast('Please add files to process', 'warning');
+                return;
+            }
             if (processBtn) {
                 processBtn.textContent = 'Processing...';
             }
+            if (processBtnEl) processBtnEl.disabled = true;
             
             showToast('Processing files...', 'info');
             
             try {
+                let processedCount = 0;
                 for (const file of appState.uploadedFiles) {
                     const content = await readFileContent(file);
                     appState.fileContents[file.name] = content;
+                    if (content && String(content).trim().length > 0) processedCount++;
                     
                     // Check if this is a CSV file with questions
                     if (file.name.toLowerCase().includes('questions') && file.name.endsWith('.csv')) {
@@ -457,81 +1187,768 @@ GROUP BY previous_tier, current_tier;`;
                             appState.extractedData.questions = csvQuestions;
                         }
                     }
+
+                    // Metrics CSV detection and parsing
+                    if (file.name.toLowerCase().includes('metric') && file.name.endsWith('.csv')) {
+                        await ensurePapaParse();
+                        const results = Papa.parse(content, {
+                            header: true,
+                            skipEmptyLines: true
+                        });
+                        const rows = Array.isArray(results.data) ? results.data : [];
+                        const parsedMetrics = [];
+                        const get = (row, keys) => {
+                            for (const k of keys) {
+                                if (row[k] && String(row[k]).trim()) return String(row[k]).trim();
+                            }
+                            return '';
+                        };
+                        const isValidValue = (v) => {
+                            if (!v) return false;
+                            const s = String(v).trim();
+                            if (s.length > 20) return false;
+                            return /^(\$?\d[\d,.]*)([MBK]\+?)?$/.test(s) || /^(\d+%|\d+\+?)$/.test(s);
+                        };
+                        rows.forEach(row => {
+                            const label = get(row, ['Category', 'Label', 'Metric', 'Name']);
+                            const value = get(row, ['Value', 'Amount', 'Figure']);
+                            const growth = get(row, ['Growth', 'Change']);
+                            const context = get(row, ['Context', 'Source', 'Notes']);
+                            if (label && isValidValue(value)) {
+                                parsedMetrics.push({ label, value, growth, context });
+                            }
+                        });
+                        if (parsedMetrics.length) {
+                            appState.extractedData.metrics = parsedMetrics.slice(0, 12);
+                        }
+                    }
                 }
                 
-                extractDataFromFiles();
+                await extractDataFromFiles();
+                updateUploadChecklist();
+                appState.dataLoaded = true;
+                setTabsEnabled(true);
+                detectSQLInFiles();
+                updateSqlAvailabilityUI();
+                collectSQLSnippetsFromFiles();
                 updateDashboard();
-
-                updateDataStatus('Files processed successfully!', 'success');
-                showToast('Files processed successfully!', 'success');
-                switchTab('command');
+                updateRequiresDataVisibility();
+                // Initialize countdown now that files are available
+                await initializeInterviewCountdown();
+                // Fill SQL editor if we found any snippets
+                populateSQLEditorFromSnippets();
+                updateSqlSnippetList();
+                if (processedCount > 0) {
+                    updateDataStatus('Files processed successfully!', 'success');
+                    showToast('Files processed successfully!', 'success');
+                    switchTab('command');
+                } else {
+                    updateDataStatus('No readable content found in the selected files.', 'warning');
+                    showToast('No readable content found. Please try different files.', 'warning');
+                }
 
             } catch (error) {
                 console.error('Error processing files:', error);
-                updateDataStatus('Error processing files. Loading sample data instead.', 'warning');
-                await loadSampleData();
+                updateDataStatus('Error processing files. Please try again with supported files.', 'error');
             } finally {
                 if (processBtn) {
                     processBtn.textContent = 'Process Files';
                 }
+                if (processBtnEl) processBtnEl.disabled = !(appState.uploadedFiles && appState.uploadedFiles.length > 0);
             }
         }
 
-        function extractDataFromFiles() {
+        async function extractDataFromFiles() {
             // Enhanced extraction logic
             const combinedContent = Object.values(appState.fileContents).join('\n');
+            const fileNames = Object.keys(appState.fileContents || {});
+            const hasJDFile = fileNames.some(n => /\b(jd|job\s*description)\b/i.test(n));
             
-            // Extract company and role from Strategic Intelligence or other docs
-            const googlePlayMatch = combinedContent.match(/Google Play (?:BI\/)?(?:Data )?Analyst/i);
-            const roleMatch = combinedContent.match(/(?:Role|Position|Title):\s*([^\n]+)/i) || 
-                             combinedContent.match(/BI\/Data Analyst[^\n]*/i);
+            // Detect candidate name early (from resume files) to avoid false panelists
+            try { detectCandidateNameFromUploads(); } catch (e) { /* ignore */ }
+
+            // Prefer company + role from JD uploads if present
+            try {
+                const fromJD = extractCompanyRoleFromJDUploads();
+                if (fromJD.company) appState.extractedData.company = fromJD.company;
+                if (fromJD.role) appState.extractedData.role = fromJD.role;
+            } catch (e) { /* ignore */ }
+
+            // Extract company and role from uploaded text and filenames (agnostic)
+            const inferredTxt = inferCompanyAndRoleFromText(combinedContent);
+            const inferredNames = inferCompanyAndRoleFromFilenames(Object.keys(appState.fileContents || {}));
+            const roleLineMatch = combinedContent.match(/(?:^|\n)\s*(Role|Position|Title)\s*[:\-–]\s*([^\n]+)/i);
+            const companyLineMatch = combinedContent.match(/(?:^|\n)\s*(Company|Company Name|Employer|Organization|Client)\s*[:\-–]\s*([^\n]+)/i);
+            const candidates = {
+                company: appState.extractedData.company || (companyLineMatch && companyLineMatch[2].trim()) || inferredTxt.company || inferredNames.company,
+                role: appState.extractedData.role || (roleLineMatch && roleLineMatch[2].trim()) || inferredTxt.role || inferredNames.role
+            };
+            if (candidates.company) appState.extractedData.company = candidates.company;
+            if (candidates.role) appState.extractedData.role = candidates.role;
+
+            // LLM assist for company/role if still missing
+            try {
+                if (window.__LLM_ENABLED__ && (!appState.extractedData.company || !appState.extractedData.role)) {
+                    const cr = await llmExtract('companyRole', combinedContent);
+                    if (cr) {
+                        if (!appState.extractedData.company && cr.company) appState.extractedData.company = cleanCompanyDisplayName(cr.company);
+                        if (!appState.extractedData.role && cr.role) appState.extractedData.role = cleanRoleTitle(cr.role);
+                    }
+                }
+            } catch (e) { /* ignore */ }
             
-            if (googlePlayMatch) {
-                appState.extractedData.company = 'Google';
-                appState.extractedData.role = googlePlayMatch[0];
-            } else {
-                const companyMatch = combinedContent.match(/(?:company|employer):\s*([^\n]+)/i);
-                if (companyMatch) {
-                    appState.extractedData.company = companyMatch[1].trim();
-                }
-                if (roleMatch) {
-                    appState.extractedData.role = roleMatch[1].trim();
-                }
+            // Prefer JD-derived panelists; only use generic sources if no JD file is present
+            if (!hasJDFile) {
+                try { extractInterviewerInfo(combinedContent); } catch (e) { /* ignore */ }
+                try { extractPanelistDetailsFromQA(combinedContent); } catch (e) { /* ignore */ }
             }
-            
-            // Extract interviewer information from Strategic Intelligence docs
-            extractInterviewerInfo(combinedContent);
-            
-            // Extract additional panelist data from structured Q&A document
-            extractPanelistDetailsFromQA(combinedContent);
+
+            // Populate/override panelists from uploaded JD file(s)
+            try { await extractPanelistsFromJDUploads(); } catch (e) { /* ignore */ }
             
             // Extract STAR stories from documents
             extractSTARStories(combinedContent);
+            try {
+                if ((appState.extractedData.stories || []).length < 2 && window.__LLM_ENABLED__) {
+                    const llmStories = await llmExtract('star', combinedContent);
+                    if (Array.isArray(llmStories) && llmStories.length) {
+                        const merged = mergeStories((appState.extractedData.stories || []), llmStories);
+                        appState.extractedData.stories = merged.slice(0, 12);
+                    }
+                }
+            } catch (e) { /* ignore */ }
             
-            // Extract key metrics
+            // Extract key metrics (text + CSV), then optional LLM supplement
             extractKeyMetrics(combinedContent);
+            try {
+                if (window.__LLM_ENABLED__ && (!appState.extractedData.metrics || appState.extractedData.metrics.length === 0)) {
+                    const mx = await llmExtract('metrics', combinedContent);
+                    if (Array.isArray(mx) && mx.length) {
+                        const existing = new Set((appState.extractedData.metrics||[]).map(m => `${m.label}|${m.value}`));
+                        const merged = (appState.extractedData.metrics||[]).slice();
+                        mx.forEach(m => {
+                            const key = `${m.label}|${m.value}`;
+                            if (!existing.has(key)) merged.push(m);
+                        });
+                        appState.extractedData.metrics = merged.slice(0, 12);
+                    }
+                }
+            } catch (e) { /* ignore */ }
             
             // Extract strengths and gaps
             extractStrengthsAndGaps(combinedContent);
+            try {
+                if (window.__LLM_ENABLED__) {
+                    const sg = await llmExtract('strengths', combinedContent);
+                    if (sg) {
+                        if (Array.isArray(sg.strengths)) {
+                            const curr = new Set((appState.extractedData.strengths||[]));
+                            sg.strengths.forEach(s => curr.add(s));
+                            appState.extractedData.strengths = Array.from(curr).slice(0, 18);
+                        }
+                        if (Array.isArray(sg.gaps)) {
+                            const currG = new Set((appState.extractedData.gaps||[]));
+                            sg.gaps.forEach(s => currG.add(s));
+                            appState.extractedData.gaps = Array.from(currG).slice(0, 12);
+                        }
+                    }
+                }
+            } catch (e) { /* ignore */ }
+            // Enhance strengths with resume content if available
+            try { mergeResumeStrengthsFromUploads(); } catch (e) { /* ignore */ }
             
-            // Set defaults if not found
-            if (!appState.extractedData.company) {
-                appState.extractedData.company = 'Google';
-            }
-            if (!appState.extractedData.role) {
-                appState.extractedData.role = 'BI/Data Analyst';
-            }
+            // Do not set hardcoded defaults; remain agnostic until files provide context
             
             // Extract questions from Q&A documents
             extractQuestionsFromContent(combinedContent);
+            try {
+                if (window.__LLM_ENABLED__ && (!appState.extractedData.questions || appState.extractedData.questions.length === 0)) {
+                    const qs = await llmExtract('questions', combinedContent);
+                    if (Array.isArray(qs) && qs.length) {
+                        appState.extractedData.questions = qs;
+                    }
+                }
+            } catch (e) { /* ignore */ }
             
-            // Extract company intelligence
-            extractCompanyIntel(combinedContent);
+            // Extract company intelligence (agnostic)
+            extractCompanyIntelAgnostic(combinedContent);
+
+            // Fallback: infer role from resume if not already set
+            try {
+                if (!appState.extractedData.role) {
+                    const inferredRole = inferRoleFromResumeUploads();
+                    if (inferredRole) appState.extractedData.role = inferredRole;
+                }
+            } catch (e) { /* ignore */ }
             
             // Preserve existing questions if they were already loaded from CSV
             if (!appState.extractedData.questions || appState.extractedData.questions.length === 0) {
                 appState.extractedData.questions = [];
             }
+
+            // Final sanitation: never include candidate as panelist
+            try { ensureCandidateNotListedAsPanelist(); } catch (e) { /* ignore */ }
+        }
+
+        // --- Company/Role extraction from JD uploads ---
+        function cleanRoleTitle(title) {
+            let s = String(title || '').trim();
+            if (!s) return '';
+            s = s.replace(/https?:\/\/\S+/g, '')
+                 .replace(/[\u2013\u2014]/g, '-')
+                 .replace(/^[\-:•\s]+|[\-:•\s]+$/g, '')
+                 .replace(/\s{2,}/g, ' ');
+            // Stop at section labels that sometimes get concatenated in PDFs
+            s = s.replace(/\s*(?:Location|Department|Employment\s*Type|Salary|Website|Company|Recruiter|Contact|Reports?\s*To)\b[\s\S]*$/i, '').trim();
+            // Remove trailing parenthetical fragments
+            s = s.replace(/\s*\([^)]*\)\s*$/, '').trim();
+            // Drop obvious non-role noise
+            if (/\b(questions?|playbook|brief|analysis|intel|strategy|notes?)\b/i.test(s)) return '';
+            const roleRx = /(Analyst|Engineer|Scientist|Manager|Architect|Director|Lead|Head|Specialist|Consultant)/i;
+            if (!roleRx.test(s)) return '';
+            // Limit to 8 words to avoid run-on text
+            const words = s.split(/\s+/);
+            if (words.length > 8) s = words.slice(0,8).join(' ');
+            // Title-case
+            s = s.split(' ').map(w => (/^[A-Z0-9]{2,}$/.test(w) ? w : (w.charAt(0).toUpperCase()+w.slice(1).toLowerCase()))).join(' ');
+            return s.substring(0, 80).trim();
+        }
+
+        function extractCompanyRoleFromJDText(text) {
+            if (!text) return { company: '', role: '' };
+            const t = String(text).replace(/[\u2013\u2014]/g, '-');
+            let company = '';
+            let role = '';
+            let m;
+            m = t.match(/Company\s*Name\s*[:\-–—]\s*([^\n]{2,180})/i) || t.match(/Company\s*[:\-–—]\s*([^\n]{2,180})/i) || t.match(/Employer\s*[:\-–—]\s*([^\n]{2,180})/i);
+            if (m) {
+                // Trim at sentence/punctuation or section keyword to avoid pulling full paragraph
+                let raw = (m[1] || '').trim();
+                raw = raw.split(/\s*(?:\.|;|\||\-|\bWebsite\b|\bJob\s*Title\b|\bLocation\b|\bDepartment\b)\s*/i)[0];
+                company = cleanCompanyDisplayName(raw);
+            }
+            m = t.match(/(Job\s*Title|Title|Position|Role)\s*[:\-–—]\s*([^\n]{2,160})/i);
+            if (m) role = cleanRoleTitle(m[2]);
+            return { company, role };
+        }
+
+        function extractCompanyRoleFromJDUploads() {
+            const entries = Object.entries(appState.fileContents || {});
+            const jdEntries = entries.filter(([name]) => /\bjd\b/i.test(name) || /job\s*description/i.test(name));
+            let best = { company: '', role: '' };
+            for (const [name, text] of jdEntries) {
+                const { company, role } = extractCompanyRoleFromJDText(text || '');
+                if (company && !best.company) best.company = company;
+                if (role && !best.role) best.role = role;
+                if (best.company && best.role) break;
+            }
+            // Fallback to filename if still missing
+            if ((!best.company || !best.role) && jdEntries.length) {
+                const base = jdEntries[0][0];
+                const fromName = inferCompanyAndRoleFromFilenames([base]);
+                if (!best.company && fromName.company) best.company = cleanCompanyDisplayName(fromName.company);
+                if (!best.role && fromName.role) best.role = cleanRoleTitle(fromName.role);
+            }
+            return best;
+        }
+
+        // Parse panelists from uploaded JD files (filenames containing 'JD')
+        async function extractPanelistsFromJDUploads() {
+            const entries = Object.entries(appState.fileContents || {});
+            const dbg = { viaLinkedIn: [], viaBullets: [], viaFallback: [], viaLLM: [], viaRescue: [], final: [] };
+            // Prefer files likely to be JD
+            // Only consider canonical JD files; avoid Q&A/Interview banks that include the word "interview"
+            const jdEntries = entries.filter(([name]) => /\b(jd|job\s*description)\b/i.test(name));
+            let all = [];
+            if (jdEntries.length > 0) {
+                jdEntries.forEach(([name, text]) => {
+                    // 1) Anchor on LinkedIn URLs which are highly reliable in this JD
+                    let found = extractPanelistsViaLinkedIn(text || '');
+                    if (found.length) dbg.viaLinkedIn.push(...found.map(p=>({source:name,...p})));
+                    // 2) Structured bullets parser
+                    if (!found.length) found = parsePanelistsFromJDText(text || '');
+                    if (found.length) { all.push(...found); dbg.viaBullets.push(...found.map(p=>({source:name,...p}))); }
+                    // Fallback heuristics if the structured parser finds nothing
+                    if (!found.length) {
+                        const alt = robustPanelistsFromPdf(text || '');
+                        if (alt.length) { all.push(...alt); dbg.viaFallback.push(...alt.map(p=>({source:name,...p}))); }
+                    }
+                });
+                // 3) Optional LLM assist over combined content (excluding resume)
+                try {
+                    if (window.__LLM_ENABLED__) {
+                        const combinedContent = Object.entries(appState.fileContents || {})
+                            .filter(([name]) => !/resume|cv/i.test(name))
+                            .map(([, content]) => content)
+                            .join('\n\n');
+
+                        const llm = await llmExtract('panelists', combinedContent);
+                        if (Array.isArray(llm) && llm.length) {
+                            const mapped = llm.map(p => ({
+                                name: p.name,
+                                role: p.role,
+                                linkedin: p.linkedin || '',
+                                archetype: determineArchetypeFromRole(p.role)
+                            }));
+                            all.push(...mapped);
+                            dbg.viaLLM.push(...mapped);
+                        }
+                        // Always run rescue to capture any leftover link/name pairs
+                        const rescued = rescuePanelistsFromLinks(combinedContent);
+                        if (rescued.length) { all.push(...rescued); dbg.viaRescue.push(...rescued); }
+                    }
+                } catch (e) { /* ignore */ }
+            }
+            // Fallback: search across all content for an "Interviewing With" section
+            if (all.length === 0 && jdEntries.length === 0) {
+                const combined = Object.values(appState.fileContents || {}).join('\n');
+                all = parsePanelistsFromJDText(combined || '');
+                if (!all.length) {
+                    all = robustPanelistsFromPdf(combined || '');
+                }
+            }
+            if (all.length === 0) return;
+            // Deduplicate by name (case-insensitive)
+            const byName = new Map();
+            all.forEach(p => {
+                if (!p || !p.name) return;
+                const key = p.name.toLowerCase();
+                if (!byName.has(key)) byName.set(key, p);
+            });
+            const jdPanelists = Array.from(byName.values());
+            // Remove any that match the candidate's name
+            let filtered = removeCandidateFromList(jdPanelists);
+            // Prefer entries that have LinkedIn links and valid roles
+            const roleRx = /(CIO|CTO|CEO|CFO|Chief\s+\w+|Director|Manager|Architect|Engineer|Scientist|Lead|Head|Recruiter|Talent|Solution|Power\s*BI|Developer|Analyst|Consultant)/i;
+            const score = p => (p.linkedin && /linkedin\.com\/in/i.test(p.linkedin) ? 2 : 0) + (p.role && (/[a-z]/.test(p.role) || roleRx.test(p.role)) ? 1 : 0);
+            filtered = filtered.sort((a,b) => score(b)-score(a));
+            if (filtered.length) {
+                appState.extractedData.panelists = filtered;
+            }
+            // Save debug snapshot
+            try { window.__PANELIST_DEBUG__ = { ...dbg, final: filtered }; } catch (e) {}
+        }
+
+        function renderPanelistDebug() {
+            if (!window.__DEBUG__) return;
+            const host = document.getElementById('panelistsContainer');
+            if (!host) return;
+            let box = document.getElementById('panelistDebug');
+            if (!box) {
+                box = document.createElement('div');
+                box.id = 'panelistDebug';
+                box.style.cssText = 'margin-bottom:1rem; padding:0.75rem; background:#fff7ed; border:1px solid #fde68a; border-radius:8px;';
+                host.parentNode.insertBefore(box, host);
+            }
+            const d = window.__PANELIST_DEBUG__ || {};
+            const fmt = (arr) => (Array.isArray(arr) && arr.length) ? arr.map(p=>`${p.name}${p.role?` — ${p.role}`:''}${p.linkedin?` (${p.linkedin})`:''}`).join('<br>') : '<em>none</em>';
+            box.innerHTML = `
+                <details open>
+                    <summary style="cursor:pointer; font-weight:600; color:#b45309;">Debug: Panelist Extraction</summary>
+                    <div style="font-size:0.9rem; line-height:1.5; margin-top:0.5rem;">
+                        <div><strong>LinkedIn‑anchored:</strong><br>${fmt(d.viaLinkedIn)}</div>
+                        <div style="margin-top:0.5rem;"><strong>Bullets:</strong><br>${fmt(d.viaBullets)}</div>
+                        <div style="margin-top:0.5rem;"><strong>Fallback (PDF):</strong><br>${fmt(d.viaFallback)}</div>
+                        <div style="margin-top:0.5rem;"><strong>LLM:</strong><br>${fmt(d.viaLLM)}</div>
+                        <div style="margin-top:0.5rem;"><strong>Rescued:</strong><br>${fmt(d.viaRescue)}</div>
+                        <div style="margin-top:0.5rem;"><strong>Final:</strong><br>${fmt(d.final)}</div>
+                    </div>
+                </details>`;
+        }
+
+        // Rescue pass: for documents where the link lines detached from the bullets,
+        // pair each linkedin.com/in URL with the nearest above line that looks like a person name.
+        function rescuePanelistsFromLinks(text) {
+            const out = [];
+            if (!text) return out;
+            const lines = String(text).split(/\r?\n/);
+            const linkRe = /https?:\/\/www\.linkedin\.com\/in\/[A-Za-z0-9\-_%]+\/?/i;
+            const nameRoleLoose = /^\s*(?:[-*•–·]|\d+\.)?\s*([A-Z][A-Za-z'’.\-]+(?:\s+[A-Z][A-Za-z'’.\-]+){1,2})\s*,?\s*([^()]{0,160})?\s*$/;
+            for (let i = 0; i < lines.length; i++) {
+                const ln = (lines[i]||'').trim();
+                const m = ln.match(linkRe);
+                if (!m) continue;
+                const link = m[0];
+                const prev = (lines[i-1]||'').trim();
+                const prev2 = (lines[i-2]||'').trim();
+                const tryLine = (s) => {
+                    const mm = s.match(nameRoleLoose);
+                    if (!mm) return false;
+                    const name = (mm[1]||'').trim();
+                    let role = (mm[2]||'').trim();
+                    if (!name) return false;
+                    if (!/^([A-Z][a-z'’.\-]+\s+[A-Z][a-z'’.\-]+(?:\s+[A-Z][a-z'’.\-]+)?)$/.test(name)) return false;
+                    if (!role || role.length < 2) role = '';
+                    out.push({ name, role, linkedin: link, archetype: determineArchetypeFromRole(role) });
+                    return true;
+                };
+                if (tryLine(prev)) continue;
+                tryLine(prev2);
+            }
+            // Deduplicate by name
+            const byName = new Map();
+            out.forEach(p => { const k = p.name.toLowerCase(); if (!byName.has(k)) byName.set(k, p); });
+            return Array.from(byName.values());
+        }
+
+        // Use LinkedIn anchors to reliably extract Name, Role near each link
+        function extractPanelistsViaLinkedIn(text) {
+            if (!text) return [];
+            const results = [];
+            const t = String(text).replace(/[\u2013\u2014]/g, '-')
+                                  .replace(/\s{2,}/g, ' ')
+                                  .replace(/(•|\u2022|\u25CF)/g, '\n• ');
+            const linkRe = /https?:\/\/www\.linkedin\.com\/in\/[A-Za-z0-9\-_%]+\/?/gi;
+            const isLikelyPersonName = (n) => {
+                if (!n) return false;
+                const tokens = n.trim().split(/\s+/);
+                if (tokens.length < 2 || tokens.length > 3) return false;
+                // Reject ALLCAPS tokens and ensure title case-ish
+                let ok = 0;
+                for (const tok of tokens) {
+                    if (/^[A-Z][a-z'’.\-]+$/.test(tok)) ok++;
+                    if (/^[A-Z]{3,}$/.test(tok)) return false;
+                }
+                return ok >= 2;
+            };
+            const roleRx = /(CIO|CTO|CEO|CFO|Chief\s+\w+|Director|Manager|Architect|Engineer|Scientist|Lead|Head|Recruiter|Talent|Solution|Power\s*BI|Developer|Analyst|Consultant)/i;
+            const isValidRole = r => r && r.length >= 2 && (/[a-z]/.test(r) || roleRx.test(r));
+
+            let m;
+            while ((m = linkRe.exec(t)) !== null) {
+                const link = m[0];
+                const start = Math.max(0, m.index - 220); // look back a couple hundred chars
+                const before = t.slice(start, m.index);
+                // Try last comma segment as role and preceding as name
+                let seg = before.replace(/\n/g, ' ').trim();
+                // remove trailing punctuation
+                seg = seg.replace(/[()]+$/g, '').trim();
+                // Pull "Name, Role" near the end
+                let mr = seg.match(/([A-Z][A-Za-z'’.\-]+(?:\s+[A-Z][A-Za-z'’.\-]+){1,2})\s*,\s*([^,;|()]{2,160})$/);
+                if (!mr) {
+                    // fallback: previous line heuristic
+                    const lines = before.split(/\n/).map(s=>s.trim()).filter(Boolean);
+                    const last = lines[lines.length-1] || '';
+                    const prev = lines[lines.length-2] || '';
+                    mr = last.match(/([A-Z][A-Za-z'’.\-]+(?:\s+[A-Z][A-Za-z'’.\-]+){1,2})\s*,\s*([^,;|()]{2,160})$/) ||
+                         prev.match(/([A-Z][A-Za-z'’.\-]+(?:\s+[A-Z][A-Za-z'’.\-]+){1,2})\s*,\s*([^,;|()]{2,160})$/);
+                    // second fallback: scan last 120 chars for a likely name, then take words after comma as role
+                    if (!mr) {
+                        const tail = seg.slice(-120);
+                        const nameOnly = tail.match(/([A-Z][A-Za-z'’.\-]+(?:\s+[A-Z][A-Za-z'’.\-]+){1,2})\s*,?\s*([^,;|()]{0,160})/);
+                        if (nameOnly) mr = nameOnly; // role may be empty; we'll keep the entry anyway
+                    }
+                }
+                if (mr) {
+                    const name = mr[1].trim();
+                    const role = (mr[2] || '').trim();
+                    if (isLikelyPersonName(name) && isValidRole(role)) {
+                        const item = { name, role, linkedin: link, archetype: determineArchetypeFromRole(role) };
+                        if (!results.some(p => p.name.toLowerCase() === name.toLowerCase())) results.push(item);
+                    } else if (isLikelyPersonName(name)) {
+                        // keep if name is valid even when role couldn't be parsed
+                        const item = { name, role: role || '', linkedin: link, archetype: determineArchetypeFromRole(role || '') };
+                        if (!results.some(p => p.name.toLowerCase() === name.toLowerCase())) results.push(item);
+                    }
+                }
+            }
+            return results.slice(0, 6);
+        }
+
+        function parsePanelistsFromJDText(text) {
+            if (!text) return [];
+            // Normalize dashes and inject newlines before bullets to handle PDF text without line breaks
+            let t = String(text).replace(/[\u2013\u2014]/g, '-')
+                                .replace(/(•|\u2022|\u25CF)/g, '\n• ');
+            const sectionHasLinkedin = /linkedin\.com\/in/i.test(t);
+            const roleRx = /(CIO|CTO|CEO|CFO|Chief\s+\w+|Director|Manager|Architect|Engineer|Scientist|Lead|Head|Recruiter|Talent|Solution|Power\s*BI|Developer|Analyst|Consultant)/i;
+            const isValidRole = r => r && r.length >= 3 && (/[a-z]/.test(r) || roleRx.test(r));
+            const isLikelyPersonName = n => {
+                if (!n) return false;
+                const tokens = n.trim().split(/\s+/);
+                if (tokens.length < 2 || tokens.length > 3) return false;
+                let lowerCount = 0;
+                for (const tok of tokens) {
+                    if (/^[A-Z][a-z'’.\-]+$/.test(tok)) lowerCount++;
+                    if (/^[A-Z]{3,}$/.test(tok)) return false; // reject ALLCAPS chunks like SAP
+                }
+                return lowerCount >= 2;
+            };
+            // Find the "Interviewing With" window to reduce false positives
+            const startMatch = t.match(/interview\w*\s*with\s*[:\-–—]?/i) || t.match(/panelists?\s*[:\-–—]?/i) || t.match(/interviewers?\s*[:\-–—]?/i);
+            if (startMatch) {
+                const start = startMatch.index;
+                const after = t.slice(start);
+                const stopMatch = after.match(/\b(Job\s*Summary|Summary|About\s+the\s+Role|Responsibilities|Overview|Requirements|Qualifications)\b/i);
+                const end = stopMatch ? start + stopMatch.index : Math.min(t.length, start + 1500);
+                t = t.slice(start, end);
+            }
+            const lines = t.split(/\r?\n+/).map(s => s.trim()).filter(Boolean);
+            const results = [];
+            let inSection = false;
+            let sectionCountdown = 60;
+            const sectionRx = /(interview\w*\s*with|panel|panelists|interviewers?)/i;
+            const bulletRx = /^\s*(?:[-*•–·]|\d+\.|\*)\s*/;
+            const nameRoleRx = /^(?:[-*•–·]|\d+\.|\*)?\s*([A-Z][A-Za-z'’.\-]+(?:\s+[A-Z][A-Za-z'’.\-]+)+)\s*(?:[,–—-]|:\s*)?\s*([^()]{0,120}?)?\s*(?:\((https?:\/\/[^)]+)\))?\s*$/;
+
+            for (let i = 0; i < lines.length; i++) {
+                const raw = lines[i];
+                if (!raw) continue;
+                if (!inSection && sectionRx.test(raw)) { inSection = true; sectionCountdown = 60; continue; }
+                if (!inSection) continue;
+                if (sectionCountdown-- <= 0) break;
+
+                // Attach bare URL to the matching bullet line above; if the previous
+                // pushed entry is not the intended one (PDF line breaks), attempt to
+                // infer the name/role from the preceding 1–2 lines and create/merge.
+                const urlMatch = raw.match(/https?:\/\/\S+/);
+                if (urlMatch) {
+                    const link = urlMatch[0];
+                    let attached = false;
+                    if (results.length && !results[results.length - 1].linkedin) {
+                        results[results.length - 1].linkedin = link;
+                        attached = true;
+                    } else {
+                        const prev = (lines[i-1]||'').trim();
+                        const prev2 = (lines[i-2]||'').trim();
+                        const nameRoleLoose = /^\s*(?:[-*•–·]|\d+\.)?\s*([A-Z][A-Za-z'’.\-]+(?:\s+[A-Z][A-Za-z'’.\-]+){1,2})\s*,?\s*([^()]{0,160})?\s*$/;
+                        const tryLine = (ln) => {
+                            const m2 = ln.match(nameRoleLoose);
+                            if (m2) {
+                                const name = (m2[1]||'').trim();
+                                let role = (m2[2]||'').trim();
+                                if (!name) return false;
+                                if (!isLikelyPersonName(name)) return false;
+                                if (!isValidRole(role)) role = role || '';
+                                if (!results.some(r => r.name.toLowerCase() === name.toLowerCase())) {
+                                    results.push({ name, role, linkedin: link, archetype: determineArchetypeFromRole(role) });
+                                } else {
+                                    const idx = results.findIndex(r => r.name.toLowerCase() === name.toLowerCase());
+                                    if (idx >= 0 && !results[idx].linkedin) results[idx].linkedin = link;
+                                }
+                                return true;
+                            }
+                            return false;
+                        };
+                        if (prev && !attached) attached = tryLine(prev);
+                        if (!attached && prev2) attached = tryLine(prev2);
+                    }
+                    if (attached) continue; // handled the URL line
+                }
+
+                // Allow entries even without bullet prefix
+                if (!bulletRx.test(raw) && !nameRoleRx.test(raw)) continue;
+                const m = raw.match(nameRoleRx);
+                if (m) {
+                    const name = (m[1] || '').trim();
+                    let role = (m[2] || '').trim();
+                    const link = (m[3] || '').trim();
+                    if (!isLikelyPersonName(name)) continue;
+                    if (sectionHasLinkedin && !/linkedin\.com\/in/i.test(link)) continue;
+                    // If role couldn't be parsed reliably, keep the entry with empty role (we'll still show the panelist)
+                    if (!isValidRole(role)) role = role || '';
+                    results.push({ name, role, linkedin: link || '', archetype: determineArchetypeFromRole(role) });
+                }
+            }
+            // Inline scanner: handle no line breaks by scanning window text for Name, Role pairs
+            if (results.length === 0 && t) {
+                const reInline = /([A-Z][A-Za-z'’.\-]+(?:\s+[A-Z][A-Za-z'’.\-]+){1,2})\s*,\s*([^,;|()]{2,80})(?:\s*\((https?:\/\/[^)]+)\))?/g;
+                let m;
+                while ((m = reInline.exec(t)) !== null) {
+                    const name = m[1].trim();
+                    let role = (m[2] || '').trim();
+                    const link = (m[3] || '').trim();
+                    // exclude false positives where role looks like a sentence continuation
+                    if (/\b(Job\s*Summary|Summary|About\s+the\s+Role)\b/i.test(role)) continue;
+                    if (!isLikelyPersonName(name)) continue;
+                    if (!isValidRole(role)) role = role || '';
+                    if (sectionHasLinkedin && !/linkedin\.com\/in/i.test(link)) continue;
+                    results.push({ name, role, linkedin: link || '', archetype: determineArchetypeFromRole(role) });
+                }
+            }
+            return results.slice(0, 10);
+        }
+
+        // Robust fallback parser for PDFs with poor line structure
+        function toTitleCaseName(n) {
+            const isAllCaps = /^[A-Z][A-Z'’.\-]+(?:\s+[A-Z][A-Z'’.\-]+){1,3}$/.test(n);
+            if (!isAllCaps) return n;
+            return n.toLowerCase().replace(/\b([a-z])/g, m => m.toUpperCase());
+        }
+
+        function robustPanelistsFromPdf(text) {
+            if (!text) return [];
+            let t = String(text).replace(/[\u2013\u2014]/g, '-')
+                                .replace(/\s{2,}/g, ' ')
+                                .replace(/(•|\u2022|\u25CF)/g, '\n• ');
+            // Limit to a window after the interviewer anchor if possible
+            const anchor = t.search(/interview\w*\s*with/i);
+            if (anchor >= 0) t = t.slice(anchor, Math.min(t.length, anchor + 2000));
+
+            const results = [];
+            const sectionHasLinkedin = /linkedin\.com\/in/i.test(t);
+            const roleRx = /(CIO|CTO|CEO|CFO|Chief\s+\w+|Director|Manager|Architect|Engineer|Scientist|Lead|Head|Recruiter|Talent|Solution|Power\s*BI|Developer|Analyst|Consultant)/i;
+            const isValidRole = r => r && r.length >= 3 && (/[a-z]/.test(r) || roleRx.test(r));
+            const isLikelyPersonName = n => {
+                if (!n) return false;
+                const tokens = n.trim().split(/\s+/);
+                if (tokens.length < 2 || tokens.length > 3) return false;
+                let lowerCount = 0;
+                for (const tok of tokens) {
+                    if (/^[A-Z][a-z'’.\-]+$/.test(tok)) lowerCount++;
+                    if (/^[A-Z]{3,}$/.test(tok)) return false;
+                }
+                return lowerCount >= 2;
+            };
+            const push = (name, role, link) => {
+                if (!name) return;
+                let n = name.trim();
+                n = toTitleCaseName(n);
+                if (!/^([A-Z][A-Za-z'’.\-]+(?:\s+[A-Z][A-Za-z'’.\-]+){1,3})$/.test(n)) return;
+                const r = (role || '').trim();
+                const lnk = (link || '').trim();
+                if (!isLikelyPersonName(n) || !isValidRole(r)) return;
+                if (sectionHasLinkedin && !/linkedin\.com\/in/i.test(lnk)) return;
+                const item = { name: n, role: r, linkedin: lnk, archetype: determineArchetypeFromRole(r) };
+                if (!results.some(p => p.name.toLowerCase() === item.name.toLowerCase())) results.push(item);
+            };
+
+            // Pattern 1: single-line "Name, Role (link)"
+            const re1 = /(?:^|\n)\s*(?:[-*•–·]\s*)?([A-Z][A-Za-z'’.\-]+(?:\s+[A-Z][A-Za-z'’.\-]+){1,3})\s*,\s*([^\n()]{2,160})\s*(?:\((https?:\/\/[^)]+)\))?(?=\n|$)/g;
+            let m;
+            while ((m = re1.exec(t)) !== null) push(m[1], m[2], m[3]);
+
+            // Pattern 2: line break between name and role
+            if (results.length === 0) {
+                const lines = t.split(/\r?\n+/).map(s => s.trim()).filter(Boolean);
+                for (let i = 0; i < lines.length - 1; i++) {
+                    const ln = lines[i];
+                    const nx = lines[i+1];
+                    const nm = ln.match(/^([A-Z][A-Za-z'’.\-]+(?:\s+[A-Z][A-Za-z'’.\-]+){1,3}),?\s*$/);
+                    const roleRx = /(CIO|CTO|CEO|CFO|Chief\s+\w+|Director|Manager|Architect|Engineer|Scientist|Lead|Head|Recruiter|Talent|Program\s*Manager|Product\s*Manager|Solution|IT\s+.+|Power\s*BI\s+Architect|Developer)/i;
+                    if (nm && roleRx.test(nx)) {
+                        const link = (lines[i+2] && /https?:\/\//.test(lines[i+2])) ? lines[i+2] : '';
+                        push(nm[1], nx.replace(/^[\-:•\s]+/, ''), link);
+                    }
+                }
+            }
+
+            return results.slice(0, 10);
+        }
+
+        // --- Candidate name detection and panelist sanitization ---
+        function detectCandidateNameFromUploads() {
+            // Derive candidate name from resume filenames and content
+            const entries = Object.entries(appState.fileContents || {});
+            const nameCandidates = [];
+
+            // From filenames
+            for (const [fname] of entries) {
+                if (!/resume|cv/i.test(fname)) continue;
+                const base = String(fname || '').split(/[\\\/]/).pop().replace(/\.[^.]+$/, '');
+                const cleaned = base.replace(/resume|cv/ig, ' ').replace(/[_]+/g, ' ').replace(/\s+/g, ' ').trim();
+                const m = cleaned.match(/([A-Z][a-z'’.\-]+(?:\s+[A-Z][a-z'’.\-]+){1,3})/);
+                if (m) nameCandidates.push(m[1].trim());
+            }
+
+            // From resume text (first lines)
+            const resumeText = entries.filter(([n]) => /resume|cv/i.test(n)).map(([,c]) => c || '').join('\n');
+            if (resumeText) {
+                const lines = resumeText.split(/\r?\n/).map(s => s.trim()).filter(Boolean).slice(0, 40);
+                for (const ln of lines) {
+                    if (/summary|experience|education|skills|linkedin|github|email|phone|address|profile|portfolio/i.test(ln)) continue;
+                    const s = ln.replace(/^\s*[•–\-*·]+\s*/, '');
+                    const m = s.match(/^([A-Z][A-Za-z'’.\-]+(?:\s+[A-Z][A-Za-z'’.\-]+){1,3})$/);
+                    if (m && m[1].length <= 60) { nameCandidates.push(m[1].trim()); break; }
+                }
+            }
+
+            if (nameCandidates.length) {
+                // Choose the candidate with the most tokens
+                nameCandidates.sort((a, b) => b.split(/\s+/).length - a.split(/\s+/).length);
+                appState.extractedData.candidateName = nameCandidates[0];
+            }
+        }
+
+        function normalizeNameForCompare(name) {
+            return String(name || '').toLowerCase().replace(/[^a-z\s]/g, ' ').replace(/\s+/g, ' ').trim();
+        }
+
+        function removeCandidateFromList(panelists) {
+            const cand = normalizeNameForCompare(appState?.extractedData?.candidateName || '');
+            if (!cand) return panelists || [];
+            const filtered = (panelists || []).filter(p => {
+                const n = normalizeNameForCompare(p?.name || '');
+                if (!n) return false;
+                // exact or contains full candidate name
+                if (n === cand) return false;
+                if (n.includes(cand)) return false;
+                return true;
+            });
+            return filtered;
+        }
+
+        function ensureCandidateNotListedAsPanelist() {
+            if (!Array.isArray(appState.extractedData.panelists)) return;
+            appState.extractedData.panelists = removeCandidateFromList(appState.extractedData.panelists);
+        }
+
+        function pickFromFilenameCompany(files) {
+            try {
+                const { company } = inferCompanyAndRoleFromFilenames(files || []);
+                return company || '';
+            } catch (e) { return ''; }
+        }
+
+        function cleanCompanyDisplayName(name) {
+            if (!name) return '';
+            let s = String(name).trim();
+            // Strip obvious URL or extension noise
+            s = s.replace(/https?:\/\/\S+/gi, '')
+                 .replace(/\.html?\b.*$/i, '')
+                 .replace(/\.pdf\b.*$/i, '')
+                 .replace(/\.docx?\b.*$/i, '')
+                 .replace(/\s*\|.*$/, '');
+            // Normalize separators
+            s = s.replace(/\s*[-_/|]+\s*/g, ' ').replace(/\s+/g, ' ').trim();
+            // Cut at the first parenthesis (e.g., "(ICT)") and anything after
+            s = s.replace(/\s*\(.*/, '').trim();
+            // Remove common stopwords if they make up the whole result
+            const stop = /^(of|the|and|for|with|in|at|on|to|a|an)$/i;
+            if (stop.test(s)) s = '';
+            // If still very long, try to pick a likely company-like segment from common delimiters
+            if (s.length > 60 || s.length < 3) {
+                const raw = String(name);
+                const parts = raw.split(/\s*[|–—-]+\s*/).map(p=>p.trim()).filter(Boolean);
+                const bad = /\b(of|the|and|for|with|in|at|on|to|a|an)\b|announc|public|launch|interview|resume|questions|playbook|brief|analysis|mapping|stories|battle|plan|bank|final|round|panel|date|metrics|csv|pdf|docx|html|md/i;
+                const candidates = parts.filter(p => !bad.test(p) && /[A-Za-z]/.test(p) && p.length <= 45);
+                if (candidates.length) s = candidates[0];
+            }
+            // Cut before verbs like "is/are/provides" that indicate sentence continuation
+            s = s.split(/\s+(?:is|are|provides|provide|was|were)\b/i)[0].trim();
+            // De-duplicate repeated starting phrase (e.g., "Acme Corp Acme Corp ...")
+            const tokens = s.split(/\s+/);
+            for (let k = 2; k <= 4 && 2*k <= tokens.length; k++) {
+                const a = tokens.slice(0,k).join(' ').toLowerCase();
+                const b = tokens.slice(k,2*k).join(' ').toLowerCase();
+                if (a && a === b) { s = tokens.slice(0,k).concat(tokens.slice(2*k)).join(' '); break; }
+            }
+            // If the result is very long, clamp to first 6 words (most company names fit)
+            if (s.split(/\s+/).length > 6) {
+                s = s.split(/\s+/).slice(0,6).join(' ');
+            }
+            // Title-case words but preserve acronyms
+            s = s.split(' ').map(w => (/^[A-Z0-9]{2,}$/.test(w) ? w : (w.charAt(0).toUpperCase()+w.slice(1).toLowerCase()))).join(' ');
+            if (s.length < 3) {
+                // Fallback to text-derived label if available
+                try {
+                    const fromText = inferCompanyAndRoleFromText(getCombinedContent()).company;
+                    if (fromText && fromText.length > 2) {
+                        return fromText.trim();
+                    }
+                } catch (e) { /* ignore */ }
+            }
+            return s.trim();
         }
 
         function updateDashboard() {
@@ -539,11 +1956,9 @@ GROUP BY previous_tier, current_tier;`;
             
             // Update header
             const titleElement = document.getElementById('dashboardTitle');
-            if (data.company && data.role) {
-                titleElement.textContent = `${data.company} | ${data.role} Interview Prep`;
-            } else {
-                titleElement.textContent = 'Master Interview Prep Dashboard';
-            }
+            const files = Object.keys(appState.fileContents || {});
+            const preferredCompany = cleanCompanyDisplayName(data.company || pickFromFilenameCompany(files));
+            titleElement.textContent = preferredCompany || 'Master Interview Prep Dashboard';
             
             // Update all sections
             updateCommandCenter();
@@ -563,45 +1978,65 @@ GROUP BY previous_tier, current_tier;`;
                 • Stories: ${data.stories.length}
             `;
             document.getElementById('dataStatus').innerHTML = statusMessage;
+            updateRequiresDataVisibility();
+            // Build dynamic sections
+            try { updateInterviewContext(); } catch (e) {}
+            try { updateSQLContextCard(); } catch (e) {}
+            try { updateSchemaCard(); } catch (e) {}
+            try { updateScenariosCard(); } catch (e) {}
+            try { updateTechBadges(); } catch (e) {}
+            try { updateQuickTipsFromData(); } catch (e) {}
         }
 
-        // Helper function for default metrics
-        function getDefaultMetrics() {
-            return [
-                { label: 'Play Points Members', value: '220M+', growth: 'Global', context: '' },
-                { label: 'Your Scale', value: '500M+', growth: 'Records', context: 'Home Depot' },
-                { label: 'Revenue Impact', value: '$3.2M', growth: '+12%', context: 'Retention' },
-                { label: 'Google Play Revenue', value: '$11.63B', growth: 'Q4 2024', context: '' },
-                { label: 'Efficiency Gain', value: '80%', growth: 'Automation', context: '' },
-                { label: 'Query Speed', value: '95%', growth: 'Faster', context: '10min→30sec' },
-                { label: 'Dashboard Adoption', value: '30%', growth: 'Increase', context: '200+ users' },
-                { label: 'Daily Processing', value: '100M+', growth: 'Records', context: 'Trulieve' }
-            ];
-        }
+        // No default metrics helper; data comes from uploaded files only.
 
         function updateCommandCenter() {
             const data = appState.extractedData;
             
-            // Update metrics with proper formatting
+            // Update metrics with uploaded data only
             const metricsContainer = document.getElementById('keyMetrics');
             if (metricsContainer) {
-                // Always use default metrics for consistent display
-                const metricsToShow = getDefaultMetrics();
-                
-                console.log('Updating metrics:', metricsToShow);
-                
-                const colors = ['#4f46e5', '#22c55e', '#f59e0b', '#8b5cf6', '#0ea5e9', '#ec4899', '#14b8a6'];
-                metricsContainer.innerHTML = metricsToShow.map((metric, index) => {
-                    const bgColor = `linear-gradient(135deg, ${colors[index % colors.length]} 0%, ${colors[(index + 1) % colors.length]} 100%)`;
-                    return `
-                        <div class="metric-tile" style="background: ${bgColor}; padding: 1.5rem; border-radius: 0.75rem; color: white; transition: all 0.3s ease; cursor: pointer; min-height: 140px; display: flex; flex-direction: column; justify-content: center; position: relative; overflow: hidden;">
-                            <div style="font-size: 2rem; font-weight: 700; margin-bottom: 0.5rem; z-index: 2;">${metric.value}</div>
-                            ${metric.growth ? `<div style="font-size: 0.875rem; opacity: 0.9; margin-bottom: 0.5rem; z-index: 2;">${metric.growth}</div>` : ''}
-                            <div style="font-size: 0.875rem; font-weight: 600; margin-bottom: 0.25rem; z-index: 2;">${metric.label}</div>
-                            ${metric.context ? `<div style="font-size: 0.75rem; opacity: 0.8; z-index: 2;">${metric.context}</div>` : ''}
-                        </div>
-                    `;
-                }).join('');
+                const isValidValue = (v) => {
+                    if (!v) return false;
+                    const s = String(v).trim();
+                    if (s.length > 20) return false;
+                    return /^(\$?\d[\d,.]*)([MBK]\+?)?$/.test(s) || /^(\d+%|\d+\+?)$/.test(s);
+                };
+                // Start with validated numeric/currency/percent metrics
+                let metricsToShow = (Array.isArray(data.metrics) ? data.metrics : []).filter(m => m && m.label && isValidValue(m.value));
+                // Merge in tiles derived from strengths (resume/context) to enrich the view
+                const strengthTiles = buildTilesFromStrengths(data.strengths || []);
+                const combined = [];
+                const seen = new Set();
+                const pushIfNew = (t) => {
+                    if (!t || !t.label || !t.value) return;
+                    const key = (String(t.label)+'|'+String(t.value)).toLowerCase();
+                    if (seen.has(key)) return;
+                    combined.push(t); seen.add(key);
+                };
+                metricsToShow.forEach(pushIfNew);
+                strengthTiles.forEach(t => { if (combined.length < 8) pushIfNew(t); });
+                metricsToShow = combined;
+                if (!metricsToShow.length) {
+                    metricsContainer.innerHTML = '<p style="color:#64748b;">No metrics available. Upload files to populate metrics.</p>';
+                } else {
+                    const colors = ['#4f46e5', '#22c55e', '#f59e0b', '#8b5cf6', '#0ea5e9', '#ec4899', '#14b8a6'];
+                    metricsContainer.innerHTML = metricsToShow.map((metric, index) => {
+                        const bgColor = `linear-gradient(135deg, ${colors[index % colors.length]} 0%, ${colors[(index + 1) % colors.length]} 100%)`;
+                        const label = String(metric.label || '').trim().slice(0, 60);
+                        const value = String(metric.value || '').trim();
+                        const growth = metric.growth ? String(metric.growth).trim().slice(0, 40) : '';
+                        const context = metric.context ? String(metric.context).trim().slice(0, 60) : '';
+                        return `
+                            <div class="metric-tile" style="background: ${bgColor}; padding: 1.5rem; border-radius: 0.75rem; color: white; transition: all 0.3s ease; cursor: pointer; min-height: 140px; display: flex; flex-direction: column; justify-content: center; position: relative; overflow: hidden;">
+                                <div style="font-size: 2rem; font-weight: 700; margin-bottom: 0.5rem; z-index: 2;">${value}</div>
+                                ${growth ? `<div style="font-size: 0.875rem; opacity: 0.9; margin-bottom: 0.5rem; z-index: 2;">${growth}</div>` : ''}
+                                <div style="font-size: 0.875rem; font-weight: 600; margin-bottom: 0.25rem; z-index: 2;">${label}</div>
+                                ${context ? `<div style="font-size: 0.75rem; opacity: 0.8; z-index: 2;">${context}</div>` : ''}
+                            </div>
+                        `;
+                    }).join('');
+                }
             }
             
             // Update strengths
@@ -621,35 +2056,65 @@ GROUP BY previous_tier, current_tier;`;
             }
         }
 
+        // Build Command Center tiles from strengths when metrics CSV not provided
+        function buildTilesFromStrengths(strengths) {
+            const tiles = [];
+            const add = (label, value, growth = '', context = '') => {
+                if (!value || !label) return;
+                tiles.push({ label, value, growth, context });
+            };
+            const uniq = new Set();
+            (strengths || []).forEach(s => {
+                if (!s || typeof s !== 'string') return;
+                const t = s.trim();
+                // 80% automation / effort reduction / efficiency
+                let m = t.match(/(\d{1,3})%\s*(?:manual|effort|reduction|automation|efficiency)/i);
+                if (m && !uniq.has('automation')) { add('Automation', `${m[1]}%`, 'Efficiency Gain'); uniq.add('automation'); }
+                // 95% query optimization / performance
+                m = t.match(/(\d{1,3})%\s*(?:query|performance|optimization|speed)/i);
+                if (m && !uniq.has('query')) { add('Query Speed', `${m[1]}%`, 'Faster'); uniq.add('query'); }
+                // 30% adoption increase
+                m = t.match(/(\d{1,3})%\s*(?:dashboard\s*)?adoption/i);
+                if (m && !uniq.has('adoption')) { add('Dashboard Adoption', `${m[1]}%`, 'Increase'); uniq.add('adoption'); }
+                // $M impact
+                m = t.match(/\$(\d+(?:\.\d+)?)\s*M/i);
+                if (m && !uniq.has('impact')) { add('Business Impact', `$${m[1]}M`, 'Outcome'); uniq.add('impact'); }
+                // 100M+ daily records
+                m = t.match(/(\d+M\+)\s*(?:daily\s*)?(?:records|transactions|rows)/i);
+                if (m && !uniq.has('daily')) { add('Daily Processing', m[1], 'Records'); uniq.add('daily'); }
+                // 500M+ records scale
+                m = t.match(/(\d+M\+|\d+\.\d+M\+)\s*(?:SKU|records)/i);
+                if (m && !uniq.has('scale')) { add('Your Scale', m[1], 'Records'); uniq.add('scale'); }
+                // Stakeholders / sessions counts
+                m = t.match(/(\d{2,4}\+)\s*(stakeholders|users|people)/i);
+                if (m && !uniq.has('stakeholders')) { add('Stakeholders', m[1], 'Trained/Served'); uniq.add('stakeholders'); }
+                m = t.match(/(\d{2,4}\+)\s*(?:training|sessions?)/i);
+                if (m && !uniq.has('sessions')) { add('Sessions', m[1], 'Delivered'); uniq.add('sessions'); }
+                // Tech keyword tiles for aesthetics/coverage
+                if (/\bpython\b/i.test(t) && !uniq.has('python')) { add('Language', 'Python'); uniq.add('python'); }
+                if (/bigquery|snowflake/i.test(t) && !uniq.has('cloud_dw')) { add('Cloud DW', 'BigQuery/Snowflake'); uniq.add('cloud_dw'); }
+                if (/tableau|looker|power\s*bi/i.test(t) && !uniq.has('bi')) { add('BI Tools', 'Tableau/Looker/Power BI'); uniq.add('bi'); }
+                if (/(A\/B|experiment|causal)/i.test(t) && !uniq.has('ab')) { add('Experimentation', 'A/B Testing'); uniq.add('ab'); }
+                if (/etl|elt|pipeline/i.test(t) && !uniq.has('etl')) { add('Pipelines', 'ETL/ELT'); uniq.add('etl'); }
+                if (/cross[-\s]?functional|stakeholder/i.test(t) && !uniq.has('xf')) { add('Collaboration', 'Cross-functional'); uniq.add('xf'); }
+                if (/executive|c-?suite/i.test(t) && !uniq.has('exec')) { add('Communication', 'Executive'); uniq.add('exec'); }
+                if (/lean\s*six\s*sigma/i.test(t) && !uniq.has('lss')) { add('Process', 'Lean Six Sigma'); uniq.add('lss'); }
+            });
+            // Keep up to 8 tiles for variety
+            return tiles.slice(0, 8);
+        }
+
         function updateCompanyIntel() {
             const data = appState.extractedData;
 
-            // Update Company Metrics Tiles - Strategic Context (non-overlapping with Command Center)
+            // Update Company Metrics Tiles only when data present
             const metricsContainer = document.getElementById('companyMetrics');
             if (metricsContainer) {
-                const companyMetrics = [
-                    { label: 'Market Dominance', value: '49%', growth: 'US Revenue', context: 'vs Apple Store' },
-                    { label: 'Global Downloads', value: '100B+', growth: 'Annual', context: 'Play Store' },
-                    { label: 'AI Investment', value: '$75B', growth: '2025 CapEx', context: 'Infrastructure' },
-                    { label: 'Regulatory Risk', value: '$205M', growth: 'Epic Settlement', context: 'Pending' },
-                    { label: 'Diamond Tier Launch', value: '2024', growth: 'New Program', context: 'Play Points' },
-                    { label: 'Gaming Revenue', value: '$31.3B', growth: '2022', context: 'vs Apple $50B' },
-                    { label: 'SQL Job Demand', value: '52.9%', growth: 'Of Postings', context: '2024 Market' },
-                    { label: 'Data Growth', value: '23%', growth: 'Through 2032', context: 'Analytics Jobs' }
-                ];
-                
-                const colors = ['#4f46e5', '#22c55e', '#f59e0b', '#8b5cf6', '#0ea5e9', '#ec4899', '#14b8a6', '#f97316'];
-                metricsContainer.innerHTML = companyMetrics.map((metric, index) => {
-                    const bgColor = `linear-gradient(135deg, ${colors[index % colors.length]} 0%, ${colors[(index + 1) % colors.length]} 100%)`;
-                    return `
-                        <div class="metric-tile" style="background: ${bgColor};">
-                            <div style="font-size: 2rem; font-weight: 700; margin-bottom: 0.5rem; z-index: 2; position: relative;">${metric.value}</div>
-                            ${metric.growth ? `<div style="font-size: 0.875rem; opacity: 0.9; margin-bottom: 0.5rem; z-index: 2; position: relative;">${metric.growth}</div>` : ''}
-                            <div style="font-size: 0.875rem; font-weight: 600; margin-bottom: 0.25rem; z-index: 2; position: relative;">${metric.label}</div>
-                            ${metric.context ? `<div style="font-size: 0.75rem; opacity: 0.8; z-index: 2; position: relative;">${metric.context}</div>` : ''}
-                        </div>
-                    `;
-                }).join('');
+                if (!data.companyIntel) {
+                    metricsContainer.innerHTML = '<p style="color:#64748b;">No company intelligence yet. Upload files to populate.</p>';
+                } else {
+                    metricsContainer.innerHTML = '';
+                }
             }
 
             const briefingDiv = document.getElementById('companyBriefing');
@@ -860,7 +2325,9 @@ GROUP BY previous_tier, current_tier;`;
 
         function updatePanelStrategy() {
             const container = document.getElementById('panelistsContainer');
-            if (!container || appState.extractedData.panelists.length === 0) return;
+            if (!container) return;
+            const list = (appState.extractedData.panelists || []).filter(p => p && p.name);
+            if (list.length === 0) { container.innerHTML = ''; if (window.__DEBUG__) try{renderPanelistDebug();}catch(e){} return; }
             
             const archetypeColors = {
                 'Champion': 'panel-champion',
@@ -899,11 +2366,18 @@ GROUP BY previous_tier, current_tier;`;
                 }
             };
 
-            container.innerHTML = appState.extractedData.panelists.map(p => `
+            container.innerHTML = list.map(p => `
                 <div class="panel-card ${archetypeColors[p.archetype] || 'panel-ally'}">
                     <div class="archetype-badge" style="${archetypeBadgeColors[p.archetype] || ''}">${p.archetype}</div>
                     <h3 style="font-weight: 600; font-size: 1.125rem; margin-bottom: 0.25rem;">${p.name}</h3>
-                    <p style="color: #64748b; font-size: 0.875rem; margin-bottom: 1rem;">${p.role}</p>
+                    <p style="color: #64748b; font-size: 0.875rem; margin-bottom: 0.5rem;">${p.role || ''}</p>
+                    ${(() => {
+                        const link = (p.linkedin || p.website || p.link || p.url || '').trim();
+                        if (!link) return '';
+                        const safe = link.replace(/"/g, '&quot;');
+                        const label = safe.replace(/^https?:\/\//, '');
+                        return `<div style="margin-bottom: 0.75rem;"><a href="${safe}" target="_blank" rel="noopener noreferrer" style="color:#2563eb; font-size:0.85rem; text-decoration:underline;">${label}</a></div>`;
+                    })()}
                     <div style="font-size: 0.875rem; margin-bottom: 0.5rem;">
                         <strong>Motivation:</strong> ${p.motivation || defaults.motivation[p.archetype] || ''}
                     </div>
@@ -916,13 +2390,14 @@ GROUP BY previous_tier, current_tier;`;
                             ${p.talkingPoints.map(tp => `<li>${tp}</li>`).join('')}
                         </ul>
                     </div>` : ''}
-                    <button class="btn btn-primary" style="width: 100%;" data-action="gen-panelist-question" data-name="${p.name.replace(/'/g, "&apos;")}">
+                    <button class="btn btn-primary btn-bottom" style="width: 100%;" data-action="gen-panelist-question" data-name="${p.name.replace(/'/g, "&apos;")}">
                         <span>✨</span> Generate a question
                         <span class="ai-badge">AI</span>
                     </button>
                     <div id="question-${p.name.replace(/\s/g, '-')}" style="margin-top: 1rem;"></div>
                 </div>
             `).join('');
+            if (window.__DEBUG__) try{renderPanelistDebug();}catch(e){}
         }
 
         function updateQuestionBank() {
@@ -964,9 +2439,9 @@ GROUP BY previous_tier, current_tier;`;
             const cat = (q.category || 'general').toLowerCase();
             const strengths = appState?.extractedData?.strengths || [];
             const metrics = appState?.extractedData?.metrics || [];
-            const company = appState?.extractedData?.company || 'Google Play';
+            const company = appState?.extractedData?.company || 'the company';
             const story = pickStoryForCategory(cat);
-            const metricTile = (metrics[0] && metrics[0].value) ? `${metrics[0].value} ${metrics[0].label}` : '220M+ Play Points members';
+            const metricTile = (metrics[0] && metrics[0].value) ? `${metrics[0].value} ${metrics[0].label}` : 'key business metrics';
 
             if (cat.includes('tech')) {
                 return `
@@ -1009,6 +2484,54 @@ GROUP BY previous_tier, current_tier;`;
                         <li>Roll out iteratively; measure impact and adjust.</li>
                     </ul>
                 </div>`;
+        }
+
+        // -------- Test Loader (input_files_test) --------
+        async function loadTestFilesFromFolder() {
+            try {
+                showToast('Loading test files...', 'info');
+                const res = await fetch('input_files_test/manifest.json', { cache: 'no-cache' });
+                if (!res.ok) {
+                    showToast('Test manifest not found', 'error');
+                    return;
+                }
+                const manifest = await res.json();
+                if (!Array.isArray(manifest) || manifest.length === 0) {
+                    showToast('No files listed in test manifest', 'warning');
+                    return;
+                }
+                const files = [];
+                for (const relPath of manifest) {
+                    try {
+                        const url = relPath;
+                        const ext = url.split('.').pop().toLowerCase();
+                        const typeMap = {
+                            pdf: 'application/pdf',
+                            docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+                            csv: 'text/csv',
+                            md: 'text/markdown',
+                            txt: 'text/plain',
+                            json: 'application/json'
+                        };
+                        const r = await fetch(url);
+                        if (!r.ok) continue;
+                        const blob = await r.blob();
+                        const file = new File([blob], url.split('/').pop(), { type: typeMap[ext] || blob.type || 'application/octet-stream' });
+                        files.push(file);
+                    } catch (e) { /* skip file */ }
+                }
+                if (!files.length) {
+                    showToast('No test files could be loaded', 'warning');
+                    return;
+                }
+                // Display and set as selected
+                handleFiles(files);
+                // Auto-process
+                setTimeout(() => processFiles(), 50);
+            } catch (e) {
+                console.error('Failed to load test files', e);
+                showToast('Failed to load test files', 'error');
+            }
         }
 
         function questionMeta(q) {
@@ -1089,13 +2612,18 @@ GROUP BY previous_tier, current_tier;`;
             const questions = appState.extractedData.questions;
             const searchTerm = document.getElementById('questionSearch')?.value.toLowerCase() || '';
             const category = document.getElementById('questionCategory')?.value || '';
+            const interviewer = document.getElementById('interviewerFilter')?.value.toLowerCase() || '';
             
             const filtered = questions.filter(q => {
                 const matchesSearch = !searchTerm || 
                     q.question.toLowerCase().includes(searchTerm) || 
                     (q.answer && q.answer.toLowerCase().includes(searchTerm));
-                const matchesCategory = !category || q.category === category;
-                return matchesSearch && matchesCategory;
+                const matchesCategory = !category ||
+                    (q.category && q.category.toLowerCase().includes(category.toLowerCase())) ||
+                    (q.categoryDisplay && q.categoryDisplay.toLowerCase().includes(category.toLowerCase()));
+                const matchesInterviewer = !interviewer ||
+                    (q.likelyAsker && q.likelyAsker.toLowerCase().includes(interviewer));
+                return matchesSearch && matchesCategory && matchesInterviewer;
             });
             
             container.innerHTML = filtered.map(q => {
@@ -1127,8 +2655,9 @@ GROUP BY previous_tier, current_tier;`;
                             <div style="flex: 1;">
                                 <div style="margin-bottom: 0.75rem; display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;">
                                     <span style="display: inline-block; padding: 0.25rem 0.75rem; background: ${getCategoryColor(q.category)}; color: white; border-radius: 1rem; font-size: 0.75rem; font-weight: 600;">
-                                        ${q.category.toUpperCase()}
+                                        ${q.category?.toUpperCase()}
                                     </span>
+                                    ${q.categoryDisplay ? `<span style="display: inline-block; padding: 0.25rem 0.75rem; background: ${getCategoryColor(q.categoryDisplay)}; color: white; border-radius: 1rem; font-size: 0.75rem; font-weight: 600;">${q.categoryDisplay.toUpperCase()}</span>` : ''}
                                     ${q.difficulty ? `<span style="display: inline-block; padding: 0.25rem 0.75rem; background: #8b5cf6; color: white; border-radius: 1rem; font-size: 0.75rem; font-weight: 600;">${q.difficulty}</span>` : ''}
                                     ${q.confidence ? `<span style="display: inline-block; padding: 0.25rem 0.75rem; background: ${confidenceColor}; color: white; border-radius: 1rem; font-size: 0.75rem; font-weight: 600;">${confidenceText} ${q.confidence}%</span>` : ''}
                                     ${q.likelyAsker ? `<span style="display: inline-block; padding: 0.25rem 0.5rem; background: #0ea5e9; color: white; border-radius: 9999px; font-size: 0.7rem;">👤 ${q.likelyAsker}</span>` : ''}
@@ -1231,7 +2760,7 @@ GROUP BY previous_tier, current_tier;`;
             if (!container) return;
             
             if (appState.extractedData.stories.length === 0) {
-                container.innerHTML = '<p style="color: #64748b;">No stories loaded yet. Upload files or load sample data.</p>';
+                container.innerHTML = '<p style="color: #64748b;">No stories loaded yet. Upload files to populate.</p>';
                 return;
             }
             
@@ -1495,6 +3024,123 @@ GROUP BY previous_tier, current_tier;`;
             }
         }
 
+        // Rich parser: load questions from Markdown with HTML-formatted answers
+        async function loadQuestionsFromMarkdownRich() {
+            try {
+                console.log('🔍 Loading questions (rich) from Google Q&A Bank.md...');
+                const res = await fetch('input_files/Google Q&A Bank.md');
+                if (!res.ok) { return []; }
+
+                const text = await res.text();
+                const lines = text.split(/\r?\n/);
+
+                function normalizeCategory(heading) {
+                    const h = (heading || '').toLowerCase();
+                    let category = 'general';
+                    let display = '';
+                    if (h.includes('technical')) category = 'technical';
+                    else if (h.includes('business')) category = 'situational';
+                    else if (h.includes('cultural')) category = 'behavioral';
+                    if (h.includes('role-specific')) display = 'role-specific';
+                    return { category, display };
+                }
+                function mdListToHtml(block) {
+                    if (!block) return '';
+                    const rows = block.trim().split(/\r?\n/).filter(r => r.trim() !== '');
+                    const isList = rows.every(r => r.trim().startsWith('- ') || r.trim().startsWith('• '));
+                    if (isList) {
+                        return '<ul style="margin:0.25rem 0 0 1rem;">' + rows.map(r => `<li>${r.replace(/^[-•]\s*/, '')}</li>`).join('') + '</ul>';
+                    }
+                    return convertMarkdownToHtml(block.trim());
+                }
+
+                let cat = { category: 'general', display: '' };
+                let current = null;
+                let section = '';
+                let buffers = {};
+
+                function beginQuestion(title) {
+                    if (current) finishQuestion();
+                    current = {
+                        question: title.replace(/^["\“\”]+|["\“\”]+$/g, ''),
+                        answer: '',
+                        category: cat.category,
+                        categoryDisplay: cat.display,
+                        likelyAsker: '',
+                        source: 'Q&A BANK'
+                    };
+                    buffers = {};
+                    section = '';
+                }
+                function finishQuestion() {
+                    const order = ['30-Second Core', '60-Second Standard (with STAR)', '90-Second Deep Dive', 'Your Approach', 'Your Response', 'Expected Impact'];
+                    let html = '';
+                    order.forEach(name => {
+                        const key = name.toLowerCase();
+                        const content = buffers[key];
+                        if (content && content.length) {
+                            html += `<div style="margin-bottom:0.5rem;"><strong>${name}:</strong> ${mdListToHtml(content.join('\n'))}</div>`;
+                        }
+                    });
+                    current.answer = html || 'Review prep notes and Q&A content';
+                    results.push(current);
+                    current = null;
+                    section = '';
+                    buffers = {};
+                }
+                function startSection(line) {
+                    const titles = ['30-Second Core', '60-Second Standard (with STAR)', '90-Second Deep Dive', 'Your Approach', 'Your Response', 'Expected Impact'];
+                    for (const t of titles) {
+                        const re = new RegExp(`^\\*\\*${t}\\*\\*:?`);
+                        if (re.test(line)) {
+                            section = t.toLowerCase();
+                            const after = line.replace(re, '').trim();
+                            buffers[section] = buffers[section] || [];
+                            if (after) buffers[section].push(after);
+                            return true;
+                        }
+                    }
+                    return false;
+                }
+
+                const results = [];
+                for (let i = 0; i < lines.length; i++) {
+                    const raw = lines[i];
+                    const line = raw.trim();
+                    if (/^## .*CATEGORY \d+:/i.test(line)) {
+                        const heading = line.replace(/^## .*CATEGORY \d+:\s*/i, '');
+                        cat = normalizeCategory(heading);
+                        continue;
+                    }
+                    if (/^### Q\d+:/i.test(line)) {
+                        const title = line.replace(/^### Q\d+:\s*/i, '');
+                        beginQuestion(title);
+                        continue;
+                    }
+                    if (/^\*Likely Asker:/i.test(line)) {
+                        if (current) current.likelyAsker = line.replace(/^\*Likely Asker:\s*/i, '').replace(/\*$/, '').trim();
+                        continue;
+                    }
+                    if (startSection(line)) continue;
+                    if (/^### Q\d+:/i.test(line) || /^##\s+/i.test(line)) continue;
+
+                    if (current) {
+                        if (line.startsWith('```')) continue; // ignore code fences
+                        if (!section) { section = 'your response'; buffers[section] = buffers[section] || []; }
+                        // Skip heavy SQL lines for prep display
+                        if (!/^SELECT|^FROM|^CREATE|^WITH\s/i.test(line)) buffers[section].push(line);
+                    }
+                }
+                if (current) finishQuestion();
+
+                console.log(`✅ Extracted ${results.length} questions (rich)`);
+                return results;
+            } catch (e) {
+                console.error('❌ Error loading rich Q&A:', e);
+                return [];
+            }
+        }
+
         // Function to load strategic questions I should ask interviewers from Q&A Bank
         async function loadStrategicQuestionsFromMarkdown() {
             try {
@@ -1555,46 +3201,16 @@ GROUP BY previous_tier, current_tier;`;
             }
         }
 
-        // Function to load STAR stories from input documents (.md/.docx/.pdf)
+        // Function to load STAR stories from uploaded documents (.md/.docx/.pdf)
         async function loadSTARStoriesFromDocuments() {
-            console.log('🔍 Loading STAR stories from Interview Playbook...');
-            const stories = [];
-            
             try {
-                // Try to load from the Interview Playbook markdown file first
-                const res = await fetch('input_files/Google - Interview Playbook.md');
-                if (res.ok) {
-                    const text = await res.text();
-                    const extractedStories = extractSTARStoriesFromPlaybook(text);
-                    stories.push(...extractedStories);
-                    console.log(`✅ Extracted ${extractedStories.length} stories from Interview Playbook`);
-                }
+                const combined = Object.values(appState.fileContents || {}).join('\n');
+                const found = extractSTARStoriesFromText(combined);
+                return found.slice(0, 12);
             } catch (e) {
-                console.log('⚠️ Could not load Interview Playbook:', e);
+                console.log('⚠️ STAR extraction failed:', e);
+                return [];
             }
-            
-            // Fallback to other files if needed
-            if (stories.length === 0) {
-                console.log('🔍 Trying alternative STAR story sources...');
-                try {
-                    const { text } = await fetchTextForCandidates([
-                        'input_files/Google - Strategic Synthesis + STAR + Experience Mapping.md',
-                        'input_files/Google - Strategic Synthesis + STAR + Experience Mapping.docx',
-                        'input_files/Google - Strategic Synthesis + STAR + Experience Mapping.pdf',
-                        'input_files/Google - Interview Playbook.md',
-                        'input_files/Google - Interview Playbook.docx',
-                        'input_files/Google - Interview Playbook.pdf'
-                    ]);
-                    if (text) {
-                        const found = extractSTARStoriesFromText(text);
-                        stories.push(...found);
-                    }
-                } catch (e) {
-                    console.log('⚠️ Could not load from alternative sources:', e);
-                }
-            }
-            
-            return stories.slice(0, 10); // Increased limit to capture more stories
         }
 
         function extractSTARStoriesFromPlaybook(content) {
@@ -2016,39 +3632,17 @@ GROUP BY previous_tier, current_tier;`;
             }
         }
         
-        // Extract STAR stories from documents
+        // Extract STAR stories from documents (only from uploaded materials)
         function extractSTARStories(content) {
             const stories = extractSTARStoriesFromText(content);
-            
-            // Also look for specific story patterns in Interview Playbook
-            const starPatterns = [
-                /Customer Segmentation[^#]*/i,
-                /BigQuery Pipeline[^#]*/i,
-                /Dashboard Adoption[^#]*/i,
-                /Lean Six Sigma[^#]*/i
-            ];
-            
-            starPatterns.forEach(pattern => {
-                const match = content.match(pattern);
-                if (match && !stories.some(s => s.title.includes(match[0].substring(0, 20)))) {
-                    const storyText = match[0];
-                    const story = {
-                        title: extractTitle(storyText),
-                        situation: extractBetween(storyText, 'Situation:', 'Task:') || '',
-                        task: extractBetween(storyText, 'Task:', 'Action:') || '',
-                        action: extractBetween(storyText, 'Action:', 'Result:') || '',
-                        result: extractBetween(storyText, 'Result:', '\n\n') || '',
-                        metric: extractMetric(storyText),
-                        fromDocument: true
-                    };
-                    if (story.situation || story.task || story.action || story.result) {
-                        stories.push(story);
-                    }
-                }
-            });
-            
             if (stories.length > 0) {
-                appState.extractedData.stories = stories;
+                const seen = new Set();
+                const uniq = [];
+                for (const s of stories) {
+                    const key = ((s.situation||'').slice(0,120) + '|' + (s.result||'').slice(0,120)).toLowerCase();
+                    if (!seen.has(key)) { seen.add(key); uniq.push(s); }
+                }
+                appState.extractedData.stories = uniq.slice(0, 12);
             }
         }
         
@@ -2056,37 +3650,8 @@ GROUP BY previous_tier, current_tier;`;
         function extractKeyMetrics(content) {
             const metrics = [];
             const addedMetrics = new Set();
-            
-            // Parse CSV metrics if present
-            if (content.includes('Metric/Data Point') || content.includes('Category,Value')) {
-                const lines = content.split('\n');
-                lines.forEach(line => {
-                    if (line.includes(',') && !line.startsWith('Metric') && !line.startsWith('Category')) {
-                        const parts = line.split(',');
-                        if (parts.length >= 2) {
-                            const label = parts[0].trim();
-                            const value = parts[1].trim();
-                            const growth = parts[2] ? parts[2].trim() : '';
-                            
-                            // Filter for key metrics
-                            if (label.includes('Google Play') || label.includes('Play Points') || 
-                                label.includes('Revenue') || label.includes('Users') || 
-                                label.includes('SQL') || label.includes('BigQuery')) {
-                                const key = label + value;
-                                if (!addedMetrics.has(key)) {
-                                    metrics.push({
-                                        label: label,
-                                        value: value,
-                                        growth: growth,
-                                        context: parts[3] ? parts[3].trim() : ''
-                                    });
-                                    addedMetrics.add(key);
-                                }
-                            }
-                        }
-                    }
-                });
-            }
+            // NOTE: Do NOT attempt to parse CSV-like lines from arbitrary text.
+            // Metrics from CSVs are handled during file processing only.
             
             // Extract from text content
             const textMetrics = [
@@ -2132,7 +3697,18 @@ GROUP BY previous_tier, current_tier;`;
             
             // Limit to most important metrics
             if (metrics.length > 0) {
-                appState.extractedData.metrics = metrics.slice(0, 12);
+                if (!Array.isArray(appState.extractedData.metrics) || appState.extractedData.metrics.length === 0) {
+                    appState.extractedData.metrics = metrics.slice(0, 12);
+                } else {
+                    // Merge without duplicates on label+value
+                    const existing = new Set(appState.extractedData.metrics.map(m => `${m.label}|${m.value}`));
+                    const merged = [...appState.extractedData.metrics];
+                    metrics.forEach(m => {
+                        const key = `${m.label}|${m.value}`;
+                        if (!existing.has(key)) merged.push(m);
+                    });
+                    appState.extractedData.metrics = merged.slice(0, 12);
+                }
             }
         }
         
@@ -2472,128 +4048,64 @@ GROUP BY previous_tier, current_tier;`;
         
         function extractSTARStoriesFromText(text) {
             const items = [];
-            
-            // Enhanced STAR stories with optimized narratives from Interview Playbook
-            const enhancedStories = [
-                {
-                    title: 'Customer Segmentation Driving Play Points-Scale Impact',
-                    situation: 'At Trulieve, a $1.2B cannabis operator, we faced 15% quarterly customer churn with no understanding of customer segments. Generic marketing campaigns were costing $2M monthly with declining ROI.',
-                    task: 'Lead development of ML-powered customer segmentation to enable targeted retention strategies across 100M+ transaction records, directly impacting quarterly earnings.',
-                    action: 'Architected Python pipeline processing 100M+ daily records using K-Means and Hierarchical Clustering. Built automated ETL with SAP HANA and AWS, eliminating 10+ hours weekly manual work. Created 7 distinct customer personas mapped to 120+ store locations. Designed Power BI dashboards with real-time segment tracking. Presented findings to C-suite with actionable recommendations.',
-                    result: '12% quarterly improvement in customer acquisition/retention ($43M annual impact), 20% reduction in inventory waste ($8M saved), ROI: 2100% on analytics investment.',
-                    learning: 'Learned that behavioral segmentation outperforms demographic segmentation 3:1 in loyalty programs.',
-                    googlePlayApplication: 'This directly parallels optimizing Play Points\' 220M+ members across 5 tiers, where I\'d use BigQuery ML to identify progression patterns and design targeted interventions for Gold-to-Platinum conversion.',
-                    industryTranslation: 'In the Google Play context, this approach would segment Play Points members by earning velocity, redemption patterns, and tier progression risk - using BigQuery\'s clustering capabilities to process billions of transactions efficiently.',
-                    metric: '$43M',
-                    category: 'technical',
-                    duration: '2-minute',
-                    versions: {
-                        '60-second': 'At Trulieve, I transformed customer retention by building ML segmentation across 100M+ records. Created automated Python pipelines with K-Means clustering, identifying 7 personas that drove targeted strategies. Results: 12% retention improvement worth $43M annually, 20% inventory waste reduction. For Play Points\' 220M members, I\'d apply similar BigQuery ML techniques to optimize tier progression.',
-                        '30-second': 'Built ML customer segmentation processing 100M+ daily records at Trulieve, improving retention 12% ($43M impact). Would apply same approach to Play Points\' tier optimization using BigQuery ML.',
-                        'hook': 'When Trulieve needed to improve customer retention across 120+ dispensaries with $1.2B annual revenue at stake, we had zero ML infrastructure and declining engagement metrics threatening our market position...'
-                    },
-                    interviewerNotes: {
-                        nikki: 'Lead with business impact, emphasize collaboration and stakeholder management, show creative problem-solving process, reference cross-functional success',
-                        brian: 'Include technical specifics (SQL, BigQuery, Python), demonstrate scale experience (millions/billions of records), show optimization techniques, reference performance improvements'
-                    },
-                    stakes: {
-                        financial: '$180M potential revenue loss from churn',
-                        operational: '120+ locations with inconsistent customer experiences', 
-                        strategic: 'Critical for maintaining #1 market position in Florida'
-                    },
-                    fromDocument: true
-                },
-                {
-                    title: 'BigQuery Pipeline at Google-Scale',
-                    situation: 'Home Depot\'s supply chain team manually tracked 500M+ SKU records across 2,000+ stores, causing 48-hour reporting delays and 8% mis-ship rates.',
-                    task: 'Design and implement BigQuery-based ETL pipeline to enable real-time inventory visibility, directly supporting $50B annual revenue operations.',
-                    action: 'Architected BigQuery tables with date partitioning and clustering by store_id/sku. Wrote optimized SQL with CTEs and window functions for inventory flow analysis. Reduced query time from 10 minutes to 30 seconds using materialized views. Built Tableau dashboards connected to BigQuery for real-time monitoring. Trained 50+ stakeholders, achieving 30% adoption increase.',
-                    result: '80% reduction in manual effort (520 hours annually saved), 25% decrease in mis-ships ($12.5M recovered), ROI: 1,250% in first year.',
-                    googlePlayApplication: 'This BigQuery expertise directly applies to processing Play Store\'s billions of daily transactions, where I\'d implement similar optimization strategies for Play Points analytics.',
-                    metric: '1,250%',
-                    category: 'technical',
-                    duration: '2-minute',
-                    versions: {
-                        'hook': 'Despite Home Depot processing 500M+ SKU records monthly with zero BigQuery expertise on the team, supply chain errors were costing $15M quarterly...',
-                        'technical-example': 'CREATE TABLE play_points_fact\nPARTITION BY DATE(transaction_date)\nCLUSTER BY member_id, tier_level AS\nSELECT \n  member_id,\n  SUM(points) OVER (PARTITION BY member_id \n    ORDER BY transaction_date \n    ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) as cumulative_points\nFROM transactions;'
-                    },
-                    interviewerNotes: {
-                        nikki: 'Include details about the 50+ training sessions and cross-functional adoption',
-                        brian: 'Focus on technical SQL examples, BigQuery optimization techniques, partitioning and clustering strategies'
-                    },
-                    fromDocument: true
-                },
-                {
-                    title: 'Crisis Response - Metric Investigation',
-                    situation: 'At Home Depot, finance and supply chain defined \'inventory turnover\' differently, causing 40% metric variance in executive dashboards.',
-                    task: 'Align stakeholders on unified metrics within 2 weeks before quarterly board meeting.',
-                    action: 'Facilitated 5 discovery sessions with both teams. Documented calculation methodologies in shared wiki. Created compromise: primary metric with team-specific drill-downs. Built consensus through data simulations showing impact.',
-                    result: 'Achieved alignment in 10 days (30% faster than deadline), 30% dashboard adoption increase, prevented $8M bonus dispute.',
-                    googlePlayApplication: 'Critical for aligning Product, Engineering, and Marketing teams on Play Points KPIs.',
-                    metric: '$8M',
-                    category: 'behavioral',
-                    duration: '90-second',
-                    versions: {
-                        'hook': 'When a critical inventory metric showed 40% variance threatening $8M in quarterly bonuses and supplier relationships...'
-                    },
-                    interviewerNotes: {
-                        nikki: 'Apply DACI framework: Driver (identify decision owner), Approver (get executive sponsor), Contributors (include all affected teams), Informed (broader stakeholder communication). Applied this at Home Depot to resolve the inventory metric dispute in 10 days.',
-                        brian: 'Focus on technical methodology for metric reconciliation and process improvements'
-                    },
-                    fromDocument: true
-                },
-                {
-                    title: 'Gold-to-Platinum Tier Progression Optimization',
-                    situation: 'Gold members (600-2,999 points) show 65% drop-off before Platinum (3,000+ points)',
-                    task: 'Increase Gold→Platinum conversion by 20% in 6 months',
-                    action: 'Week 1-2: Diagnostic analysis using progression_analysis CTE with median velocity, inactivity tracking, days to promotion calculations. Week 3-4: Intervention design identifying 70-85% progress members, personalized bonus events, A/B test threshold adjustments. Month 2-6: Implementation via BigQuery ML predictions, weekly cohort tracking, engagement iteration.',
-                    result: 'Expected: 20% increase in Platinum members (44,000 additional), $3-4M additional revenue from increased engagement, framework scalable to all tier transitions.',
-                    googlePlayApplication: 'Based on my Trulieve segmentation improving retention 12%, I\'d tackle Play Points progression through targeted behavioral analysis and intervention campaigns.',
-                    metric: '$3-4M',
-                    category: 'strategic',
-                    duration: '2-minute',
-                    sqlExample: 'WITH progression_analysis AS (\n  SELECT \n    member_id,\n    tier_level,\n    PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY daily_points) as median_velocity,\n    DATE_DIFF(CURRENT_DATE(), last_activity, DAY) as days_inactive,\n    points_to_next_tier / NULLIF(avg_daily_points, 0) as days_to_promotion\n  FROM member_activity\n  WHERE tier_level = \'Gold\'\n)',
-                    interviewerNotes: {
-                        nikki: 'Emphasize business impact and strategic approach to member engagement',
-                        brian: 'Include technical BigQuery implementation and optimization techniques'
-                    },
-                    fromDocument: true
-                }
-            ];
-            
-            // Add enhanced stories to items
-            items.push(...enhancedStories);
-            
-            // Try original extraction as fallback
-            const blocks = text.split(/\b(?:STAR\s*#?\d*:?|Story\s*#?\d*:?|Situation\s*:)\b/i);
-            for (let i = 1; i < blocks.length && items.length < 8; i++) {
-                const blk = blocks[i];
-                const s = extractBetween(blk, 'Situation:', 'Task:') || 
-                         extractBetween(blk, '', 'Task:') || '';
-                const t = extractBetween(blk, 'Task:', 'Action:') || '';
-                const a = extractBetween(blk, 'Action:', 'Result:') || '';
-                const r = extractBetween(blk, 'Result:', 'Learning:') || 
-                         extractBetween(blk, 'Result:', '\n\n') || '';
-                         
-                if (s && t && a && r && s.length > 20) {
-                    const newStory = {
-                        title: extractTitle(blk) || `STAR Story ${items.length + 1}`,
-                        problem: '',
-                        metric: extractMetric(r),
-                        situation: s.substring(0, 300),
-                        task: t.substring(0, 200),
-                        action: a.substring(0, 400),
-                        result: r.substring(0, 300),
+            if (!text) return items;
+            const lines = String(text).split(/\r?\n/);
+            let buf = { title: '', situation: '', task: '', action: '', result: '' };
+            let current = '';
+            function flush() {
+                const has = (v) => v && v.trim().length > 0;
+                if ((has(buf.situation)||has(buf.task)||has(buf.action)) && has(buf.result)) {
+                    const title = buf.title || (buf.result.split(/[.!?]/)[0] || buf.situation.split(/[.!?]/)[0] || 'STAR Story');
+                    items.push({
+                        title: title.substring(0,100),
+                        situation: (buf.situation||'').trim(),
+                        task: (buf.task||'').trim(),
+                        action: (buf.action||'').trim(),
+                        result: (buf.result||'').trim(),
+                        metric: extractMetric((buf.result||'')) || extractMetric((buf.situation||'')) || '',
                         fromDocument: true
-                    };
-                    
-                    // Only add if not duplicate
-                    if (!items.some(existing => existing.title === newStory.title)) {
-                        items.push(newStory);
+                    });
+                }
+                buf = { title: '', situation: '', task: '', action: '', result: '' };
+                current = '';
+            }
+            for (let i=0;i<lines.length;i++) {
+                const line = (lines[i]||'').trim();
+                if (!line) continue;
+                const m = line.match(/^(?:\*\*\s*)?(situation|task|action|result|s|t|a|r)\b[^:]*:\s*(.*)$/i);
+                if (m) {
+                    const label = m[1].toLowerCase()[0];
+                    const val = m[2]||'';
+                    if (label==='s') { if (current && current!=='s') flush(); current='s'; buf.situation += (buf.situation?' ':'')+val; }
+                    else if (label==='t') { current='t'; buf.task += (buf.task?' ':'')+val; }
+                    else if (label==='a') { current='a'; buf.action += (buf.action?' ':'')+val; }
+                    else if (label==='r') { current='r'; buf.result += (buf.result?' ':'')+val; }
+                } else if (current) {
+                    if (current==='s') buf.situation += ' '+line;
+                    else if (current==='t') buf.task += ' '+line;
+                    else if (current==='a') buf.action += ' '+line;
+                    else if (current==='r') buf.result += ' '+line;
+                } else {
+                    if (!buf.title && /^[A-Z][A-Za-z0-9 \-]{4,60}$/.test(line) && !/:$/.test(line)) {
+                        buf.title = line;
                     }
                 }
             }
-            
+            flush();
+            // Also parse compact single-line "S:.. T:.. A:.. R:.." blocks
+            const compactRe = /S\s*:\s*([^TAR\n]+)\s*T\s*:\s*([^AR\n]+)\s*A\s*:\s*([^R\n]+)\s*R\s*:\s*([^\n]+)/gi;
+            let mm;
+            while ((mm = compactRe.exec(text)) !== null) {
+                items.push({
+                    title: (mm[1].split(/[.!?]/)[0] || 'STAR Story').substring(0,100),
+                    situation: mm[1].trim(),
+                    task: mm[2].trim(),
+                    action: mm[3].trim(),
+                    result: mm[4].trim(),
+                    metric: extractMetric(mm[4]) || extractMetric(mm[1]) || '',
+                    fromDocument: true
+                });
+            }
             return items;
         }
 
@@ -2611,105 +4123,62 @@ GROUP BY previous_tier, current_tier;`;
         // Function to generate AI-powered questions for panelists based on all input files
         async function generateAIPanelistQuestions(panelistName, panelistRole, panelistArchetype) {
             console.log(`🎯 Generating tailored questions for ${panelistName} (${panelistArchetype})`);
-            
-            // First try to get questions from the loaded Q&A bank based on "Likely Asker" assignments
             let questions = [];
-            
-            // Access the current app state to get loaded questions
-            if (window.appState && window.appState.extractedData && window.appState.extractedData.questions && window.appState.extractedData.questions.length > 0) {
-                // Filter questions by likely asker matching the panelist name
-                const panelistQuestions = window.appState.extractedData.questions.filter(q => 
-                    q.likelyAsker && q.likelyAsker.toLowerCase().includes(panelistName.toLowerCase())
+
+            // Prefer questions tagged to this panelist in uploaded Q&A
+            const bank = (window.appState?.extractedData?.questions) || [];
+            if (bank.length) {
+                const byAsker = bank.filter(q => q.likelyAsker && q.likelyAsker.toLowerCase().includes(String(panelistName).toLowerCase()));
+                if (byAsker.length) return byAsker.map(q => q.question);
+            }
+
+            // Role/Archetype heuristics (company‑agnostic)
+            const r = String(panelistRole||'').toLowerCase();
+            const isExec = /(cio|cto|cfo|chief|vp|director|head)/.test(r);
+            const isMgr = /(manager|lead|program|product)/.test(r);
+            const isTech = /(architect|engineer|developer|scientist|analyst|bi|power\s*bi|data)/.test(r);
+            const isRecruiter = /(recruiter|talent|hr)/.test(r);
+
+            if (isExec) {
+                questions.push(
+                    'What metrics would most influence your decision‑making in this role?',
+                    'Where do you see the biggest opportunity for impact in the next 6–12 months?',
+                    'How do you balance speed with quality for high‑visibility initiatives?'
                 );
-                
-                if (panelistQuestions.length > 0) {
-                    questions = panelistQuestions.map(q => q.question);
-                    console.log(`📋 Found ${questions.length} specific questions assigned to ${panelistName} from Q&A Bank`);
-                    return questions;
-                } else {
-                    console.log(`⚠️ No specific questions found for ${panelistName} in Q&A Bank, using fallback questions`);
-                }
             }
-            
-            // Fallback to curated questions if no Q&A bank questions found
-            
-            if (panelistName === 'Nikki Diman') {
-                questions = [
-                    'Tell me about a time you had to extract insights from minimal or messy data to solve a business problem.',
-                    'Describe a situation where you managed conflicting stakeholder requirements across different teams.',
-                    'How would you approach investigating a sudden 15% spike in Play Points member churn?',
-                    'Walk me through how you would present complex BigQuery analysis findings to non-technical executives.',
-                    'Give me an example of when you had to be creative in your problem-solving approach due to data limitations.'
-                ];
-            } else if (panelistName === 'Brian Mauch') {
-                questions = [
-                    'How would you optimize a BigQuery query that processes billions of Play Store transactions daily?',
-                    'Describe your experience with large-scale data architecture and pipeline design.',
-                    'Walk me through your approach to ensuring data quality in high-volume ETL processes.',
-                    'What strategies would you use to reduce query costs while maintaining performance at Google scale?',
-                    'Tell me about a time you had to troubleshoot performance issues in a data warehouse environment.'
-                ];
-            } else if (panelistName === 'Jolly Jayaprakash') {
-                questions = [
-                    'Are you available to start immediately and work Pacific Time hours when needed?',
-                    'How do you prioritize your work when supporting multiple stakeholders with urgent requests?',
-                    'What excites you most about working on Google Play Points analytics at this scale?',
-                    'Describe your experience working in fast-paced, collaborative environments.',
-                    'How do you ensure clear communication when working with distributed teams?'
-                ];
-            } else {
-                // Fallback based on archetype
-                switch (panelistArchetype) {
-                    case 'Gatekeeper':
-                        questions = [
-                            'Tell me about a time you influenced stakeholders without formal authority.',
-                            'How do you handle ambiguous requirements from multiple teams?',
-                            'Describe your approach to stakeholder management in cross-functional projects.'
-                        ];
-                        break;
-                    case 'Technical Validator':
-                        questions = [
-                        `Walk me through your approach to statistical analysis in A/B testing.`,
-                        `How do you validate data models and ensure statistical rigor?`,
-                        `Describe a complex data problem you solved using advanced analytics.`
-                        ];
-                        break;
-                case 'Ally':
-                    questions = [
-                        `How do you handle ambiguity in project requirements?`,
-                        `Tell me about a time you had to learn a new technology quickly.`,
-                        `What motivates you to work in data analytics?`
-                    ];
-                    break;
-                case 'Skeptic':
-                    questions = [
-                        `What are the biggest challenges you see in data analytics?`,
-                        `How do you ensure your analysis is robust and defensible?`,
-                        `Tell me about a time your analysis was challenged and how you responded.`
-                    ];
-                    break;
-                case 'Gatekeeper':
-                    questions = [
-                        `How do you prioritize multiple competing data requests?`,
-                        `What criteria do you use to evaluate data quality?`,
-                        `Describe your process for ensuring compliance and governance.`
-                    ];
-                    break;
-                default:
-                    questions = [
-                        `Tell me about your experience with ${panelistRole}.`,
-                        `What are the key challenges in this role?`,
-                        `How do you measure success in data analytics?`
-                    ];
-                }
+            if (isMgr) {
+                questions.push(
+                    'How do you prioritize trade‑offs across competing stakeholders?',
+                    'What does success look like for this team in 90 days?',
+                    'How do you validate outcomes beyond dashboard metrics?'
+                );
             }
-            
-            // Add company-specific context if available
+            if (isTech) {
+                questions.push(
+                    'What technical guardrails matter most (cost, latency, reliability)?',
+                    'What data model patterns work best for your core analytics?',
+                    'How do you approach incident response and root‑cause analysis?'
+                );
+            }
+            if (isRecruiter) {
+                questions.push(
+                    'What qualities separate successful hires on this team?',
+                    'What are the must‑have skills for this role?',
+                    'What does the interview timeline and decision process look like?'
+                );
+            }
+
+            // Archetype refinement
+            const a = String(panelistArchetype||'').toLowerCase();
+            if (a.includes('gatekeeper')) questions.push('What are the key compliance or process expectations I should be aware of?');
+            if (a.includes('technical')) questions.push('Which performance and data‑quality checks are most important to you?');
+            if (a.includes('ally')) questions.push('How can I help the team deliver quick wins while building long‑term value?');
+            if (a.includes('skeptic')) questions.push('Where have previous solutions fallen short, and how could this role address that?');
+
             if (appState.extractedData.company) {
-                questions.push(`How does your experience align with ${appState.extractedData.company}'s data culture?`);
+                questions.push(`How does your team define success at ${appState.extractedData.company}?`);
             }
-            
-            return questions;
+            return Array.from(new Set(questions)).slice(0, 8);
         }
 
         function addPanelist() {
@@ -2750,7 +4219,8 @@ GROUP BY previous_tier, current_tier;`;
             let strategicQuestions = {};
             try {
                 console.log('📋 Loading questions from Q&A Bank...');
-                const questionsFromMD = await loadQuestionsFromMarkdown();
+                // Prefer rich HTML-formatted parser
+                const questionsFromMD = await loadQuestionsFromMarkdownRich();
                 if (questionsFromMD && questionsFromMD.length > 0) {
                     questions = questionsFromMD;
                     console.log(`✅ Loaded ${questions.length} questions from Q&A Bank`);
@@ -2822,11 +4292,11 @@ GROUP BY previous_tier, current_tier;`;
                 metrics = await loadMetricsForCommandCenter();
             } catch (error) {
                 console.log('Could not load metrics:', error);
-                metrics = getDefaultMetrics(); // Use default metrics as fallback
+                metrics = [];
             }
 
             // Infer company/role hints from available files/metrics
-            let inferred = { company: 'Google Play', role: 'BI Data Analyst' };
+            let inferred = { company: '', role: '' };
             try {
                 inferred = await inferCompanyAndRoleFromFiles(intel);
             } catch (error) {
@@ -2947,108 +4417,95 @@ GROUP BY previous_tier, current_tier;`;
         // AI Generation Functions (Mock implementations)
         async function generatePowerIntro() {
             const introDiv = document.getElementById('powerIntro');
+            const company = appState.extractedData.company || '';
+            const role = appState.extractedData.role || '';
+            const metrics = appState.extractedData.metrics || [];
+            const strengths = appState.extractedData.strengths || [];
+            const tech = deriveTechStack(getCombinedContent());
+            const m1 = metrics[0] ? `${metrics[0].value} ${metrics[0].label}` : '';
+            const m2 = metrics[1] ? `${metrics[1].value} ${metrics[1].label}` : '';
+            const s1 = strengths[0] || '';
+            const s2 = strengths[1] || '';
+            const t1 = tech[0] || '';
+            const t2 = tech[1] || '';
+
+            const hookRole = (company || role) ? `${company ? company + ' ' : ''}${role || 'role'}` : 'this role';
+            const proofBullets = [m1, m2, s1, s2].filter(Boolean).slice(0,3).map(x=>`• ${x}`).join('<br>');
+            const stackLine = [t1,t2].filter(Boolean).join(', ');
+
             introDiv.innerHTML = `
                 <div style="padding: 2rem; background: linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%); border-radius: 0.75rem; border-left: 4px solid #0ea5e9;">
                     <div style="display: flex; align-items: center; margin-bottom: 1rem;">
                         <h3 style="color: #1e293b; margin: 0; margin-right: 0.5rem;">🎯 Strategic Opening Hook</h3>
                         ${aiBadge()}
                     </div>
-                    
                     <div style="background: white; padding: 1.5rem; border-radius: 0.5rem; margin-bottom: 1rem;">
                         <h4 style="color: #0ea5e9; margin-bottom: 1rem;">💼 Your 90-Second Power Hook</h4>
-                        <p style="line-height: 1.6; font-size: 1rem;"><strong>"Thank you for this opportunity to discuss the Google Play BI role.</strong></p>
-                        <p style="line-height: 1.6; margin-top: 1rem;"><strong>I bring 8+ years of advanced SQL expertise</strong> specifically optimized for billion-row datasets, with proven success processing <strong>500M+ SKU records at Home Depot</strong> and <strong>100M+ daily transactions at Trulieve.</strong></p>
-                        <p style="line-height: 1.6; margin-top: 1rem;"><strong>My impact is measurable:</strong> I've driven <strong>12% customer retention improvements worth $3.2M</strong>, achieved <strong>95% query optimization</strong> reducing processing from 10 minutes to 30 seconds, and increased <strong>dashboard adoption by 30%</strong> across 200+ stakeholders.</p>
-                        <p style="line-height: 1.6; margin-top: 1rem;"><strong>What excites me about this role</strong> is applying this scalable expertise to <strong>Google Play's 220M+ Play Points members</strong> and <strong>$11.63B quarterly ecosystem,</strong> particularly addressing the Gold-to-Platinum progression challenges and supporting the upcoming AI/ML integration expansion."</p>
-                        <p style="line-height: 1.6; margin-top: 1rem; font-style: italic; color: #64748b;"><strong>Duration: 85-90 seconds | Key metrics embedded | Direct role relevance</strong></p>
+                        <p style="line-height: 1.6; font-size: 1rem;"><strong>"Thank you for the opportunity to discuss ${hookRole}.</strong></p>
+                        <p style="line-height: 1.6; margin-top: 1rem;">I focus on measurable outcomes with a strong foundation in ${stackLine || 'modern analytics'} and rigorous SQL. Recently, I've delivered:</p>
+                        <p style="line-height: 1.6; margin-top: 0.5rem;">${proofBullets || '• Quantified business impact<br>• Performance and cost improvements<br>• Clear communication with stakeholders'}</p>
+                        <p style="line-height: 1.6; margin-top: 1rem;">I'm excited to apply this approach to your team's priorities—partnering cross-functionally, validating assumptions with data, and moving quickly while keeping quality high."</p>
+                        <p style="line-height: 1.6; margin-top: 1rem; font-style: italic; color: #64748b;"><strong>Duration: ~90 seconds | Metrics-driven | Role-focused</strong></p>
                     </div>
-                    
                     <div style="background: linear-gradient(135deg, #22c55e 0%, #16a34a 100%); color: white; padding: 1rem; border-radius: 0.5rem;">
                         <h4 style="color: white; margin-bottom: 0.75rem;">🚀 Opening Impact Framework</h4>
                         <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
                             <div>
-                                <strong>Hook (15s):</strong> Role-specific expertise + scale<br>
-                                <strong>Proof (45s):</strong> 3 quantified achievements<br>
-                                <strong>Bridge (25s):</strong> Google Play relevance + enthusiasm
+                                <strong>Hook (15s):</strong> Context + focus<br>
+                                <strong>Proof (45s):</strong> 2–3 quantified outcomes<br>
+                                <strong>Bridge (25s):</strong> Align to team priorities
                             </div>
                             <div>
-                                <strong>Key Numbers:</strong> 500M+, $3.2M, 95%, 220M+<br>
-                                <strong>Differentiators:</strong> SQL mastery, C-level experience<br>
-                                <strong>Context:</strong> Play Points challenges, AI/ML future
+                                <strong>Key Numbers:</strong> ${m1 || '—'} ${m2 ? ' | ' + m2 : ''}<br>
+                                <strong>Tech:</strong> ${stackLine || '—'}<br>
+                                <strong>Style:</strong> Clear, measurable, collaborative
                             </div>
                         </div>
                     </div>
-                </div>
-            `;
-            showToast('Comprehensive power hook generated!', 'success');
+                </div>`;
+            showToast('Power intro generated from your materials!', 'success');
         }
 
         async function generateTalkingPoints() {
             const pointsDiv = document.getElementById('talkingPoints');
+            const strengths = appState.extractedData.strengths || [];
+            const gaps = appState.extractedData.gaps || [];
+            const metrics = appState.extractedData.metrics || [];
+            const tech = deriveTechStack(getCombinedContent());
+            const techList = tech.slice(0,6).map(t=>`<li>${t}</li>`).join('') || '<li>Add more materials to detect tech stack</li>';
+            const strengthList = strengths.slice(0,6).map(s=>`<li>${s}</li>`).join('') || '<li>Add strengths in your materials</li>';
+            const metricList = metrics.slice(0,4).map(m=>`<li><strong>${m.value}</strong> — ${m.label}</li>`).join('') || '<li>Provide a metrics CSV or include metrics in your docs</li>';
+            const diffList = [
+                'Outcome-first storytelling with metrics',
+                'Cross-functional collaboration with clear trade-offs',
+                'Data rigor with practical cost/perf validation'
+            ].map(d=>`<div>• ${d}</div>`).join('');
             pointsDiv.innerHTML = `
                 <div style="padding: 2rem; background: linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%); border-radius: 0.75rem; border-left: 4px solid #22c55e;">
                     <div style="display: flex; align-items: center; margin-bottom: 1rem;">
                         <h3 style="color: #1e293b; margin: 0; margin-right: 0.5rem;">🎯 Strategic Talking Points</h3>
                         ${aiBadge()}
                     </div>
-                    
                     <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem;">
-                        <!-- Technical Excellence Column -->
                         <div style="background: white; padding: 1.5rem; border-radius: 0.5rem;">
-                            <h4 style="color: #22c55e; margin-bottom: 1rem; display: flex; align-items: center;">
-                                ⚙️ Technical Excellence
-                            </h4>
-                            <ul style="line-height: 1.8; margin: 0; padding-left: 1rem;">
-                                <li><strong>Scale Mastery:</strong> 500M+ SKU records, 100M+ daily transactions processed</li>
-                                <li><strong>Query Optimization:</strong> 95% performance improvement (10min→30sec)</li>
-                                <li><strong>BigQuery Readiness:</strong> Snowflake expertise transfers directly to Google's platform</li>
-                                <li><strong>Pipeline Architecture:</strong> Built automated ETL reducing manual effort by 80%</li>
-                                <li><strong>Cloud Native:</strong> AWS, Azure, GCP experience with modern data stacks</li>
-                            </ul>
+                            <h4 style="color: #22c55e; margin-bottom: 1rem;">⚙️ Technical Relevance</h4>
+                            <ul style="line-height: 1.8; margin: 0; padding-left: 1rem;">${techList}</ul>
                         </div>
-                        
-                        <!-- Business Impact Column -->
                         <div style="background: white; padding: 1.5rem; border-radius: 0.5rem;">
-                            <h4 style="color: #3b82f6; margin-bottom: 1rem; display: flex; align-items: center;">
-                                📊 Business Impact
-                            </h4>
-                            <ul style="line-height: 1.8; margin: 0; padding-left: 1rem;">
-                                <li><strong>Revenue Generation:</strong> $3.2M impact through 12% retention improvement</li>
-                                <li><strong>Cost Savings:</strong> $2M annual savings through automation</li>
-                                <li><strong>Stakeholder Enablement:</strong> 30% dashboard adoption across 200+ users</li>
-                                <li><strong>Executive Communication:</strong> C-level presentation experience</li>
-                                <li><strong>Cross-Functional Leadership:</strong> Lean Six Sigma process optimization</li>
-                            </ul>
+                            <h4 style="color: #3b82f6; margin-bottom: 1rem;">📊 Proof Points</h4>
+                            <ul style="line-height: 1.8; margin: 0; padding-left: 1rem;">${metricList}</ul>
                         </div>
                     </div>
-                    
                     <div style="background: white; padding: 1.5rem; border-radius: 0.5rem; margin-top: 1.5rem;">
-                        <h4 style="color: #8b5cf6; margin-bottom: 1rem;">🚀 Google Play Specific Relevance</h4>
-                        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 1rem;">
-                            <div style="background: #f8fafc; padding: 1rem; border-radius: 0.25rem; border-left: 3px solid #8b5cf6;">
-                                <strong>Play Points Optimization:</strong> My customer segmentation expertise directly applies to analyzing loyalty tier progression patterns across 220M+ members
-                            </div>
-                            <div style="background: #f8fafc; padding: 1rem; border-radius: 0.25rem; border-left: 3px solid #0ea5e9;">
-                                <strong>AI/ML Readiness:</strong> Experience with Python ML pipelines positions me well for the upcoming 6-12 month AI integration expansion
-                            </div>
-                            <div style="background: #f8fafc; padding: 1rem; border-radius: 0.25rem; border-left: 3px solid #f59e0b;">
-                                <strong>Regulatory Awareness:</strong> Understanding of data governance requirements relevant to Epic Games settlement and EU DMA compliance
-                            </div>
-                        </div>
+                        <h4 style="color: #8b5cf6; margin-bottom: 1rem;">✅ Strengths To Emphasize</h4>
+                        <ul style="line-height: 1.8; margin: 0; padding-left: 1rem;">${strengthList}</ul>
                     </div>
-                    
                     <div style="background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%); color: white; padding: 1rem; border-radius: 0.5rem; margin-top: 1.5rem;">
-                        <h4 style="color: white; margin-bottom: 0.75rem;">💡 Key Differentiators to Emphasize</h4>
-                        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 1rem;">
-                            <div><strong>• Immediate Impact:</strong> 8+ years SQL means zero ramp-up time</div>
-                            <div><strong>• Proven Scale:</strong> Already operating at Google-level data volumes</div>
-                            <div><strong>• Stakeholder Savvy:</strong> C-level presentation skills rare in contractor pool</div>
-                            <div><strong>• Process Excellence:</strong> Lean Six Sigma aligns with "Year of Efficiency"</div>
-                        </div>
+                        <h4 style="color: white; margin-bottom: 0.75rem;">💡 Differentiators</h4>
+                        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 1rem;">${diffList}</div>
                     </div>
-                </div>
-            `;
-            showToast('Comprehensive talking points generated!', 'success');
+                </div>`;
+            showToast('Talking points generated from your materials!', 'success');
         }
 
         async function generateGapStrategies() {
@@ -3069,37 +4526,110 @@ GROUP BY previous_tier, current_tier;`;
 
         async function generateCulturalAnalysis() {
             const culturalDiv = document.getElementById('culturalFit');
-            
-            // Check if there's already meaningful content loaded from files
-            const hasRealContent = culturalDiv.innerHTML.trim() && 
-                                 !culturalDiv.innerHTML.includes('How to Demonstrate Cultural Fit') &&
-                                 !culturalDiv.innerHTML.includes('Use data in every answer') &&
-                                 !culturalDiv.innerHTML.includes('Cultural analysis will be populated here') &&
-                                 culturalDiv.innerHTML.length > 100 &&
-                                 culturalDiv.innerHTML.includes('Google Play Cultural Intelligence');
-            
-            if (hasRealContent) {
-                // Don't overwrite existing cultural analysis data
-                console.log('✅ Preserving existing cultural fit analysis');
-                showToast('Cultural fit analysis already loaded!', 'info');
-                return;
-            }
-            
-            const analysisHTML = `
-                <div style="padding: 1rem; background: #f0f9ff; border-radius: 0.5rem; border-left: 4px solid #0ea5e9;">
-                    <div style="display: flex; align-items: center; margin-bottom: 0.5rem;">${aiBadge()}</div>
-                    <p><strong>How to Demonstrate Cultural Fit:</strong></p>
-                    <ul>
-                        <li>• Use data in every answer</li>
-                        <li>• Emphasize collaboration</li>
-                        <li>• Show user-centric thinking</li>
-                        <li>• Demonstrate learning mindset</li>
-                    </ul>
-                </div>
-            `;
-            
-            culturalDiv.innerHTML = analysisHTML;
-            showToast('Cultural fit guidance generated!', 'success');
+            if (!culturalDiv) return;
+
+            const text = getCombinedContent();
+            const company = cleanCompanyDisplayName(appState.extractedData.company || '');
+            const role = cleanRoleTitle(appState.extractedData.role || '');
+            const tech = deriveTechStack(text).slice(0, 8);
+            const metrics = appState.extractedData.metrics || [];
+            const panelists = appState.extractedData.panelists || [];
+
+            // Try LLM-driven cultural summary first if enabled
+            try {
+                if (window.__LLM_ENABLED__) {
+                    const llm = await llmExtract('culture', text);
+                    if (llm && (llm.values?.length || llm.signals?.length || llm.workMode || llm.benefits?.length)) {
+                        const panelistList = panelists.map(p => `${p.name}${p.role?` — ${p.role}`:''}`).join('<br>') || 'Derived from JD when available';
+                        const html = `
+                            <div>
+                                <div style="display:flex; align-items:center; gap:0.5rem; margin-bottom:0.75rem;">${aiBadge()}<h4 style="margin:0; color:#0ea5e9;">Cultural Fit Signals${company?` — ${company}`:''}</h4></div>
+                                ${llm.workMode ? `<div style=\"background:#f0fdf4; padding:1rem; border-radius:0.5rem; margin-bottom:1rem;\"><strong>Work Style:</strong> ${llm.workMode}${llm.officeDays?` (${llm.officeDays})`:''}</div>` : ''}
+                                <div class="grid grid-2" style="gap:1rem;">
+                                    <div style="background:#eff6ff; padding:1rem; border-radius:0.5rem;">
+                                        <h5 style="margin:0 0 0.5rem 0; color:#2563eb;">What They Value</h5>
+                                        <ul style="margin:0; padding-left:1rem;">${(llm.values||[]).map(v=>`<li>${v}</li>`).join('') || '<li>Collaboration</li><li>Data-driven decisions</li>'}</ul>
+                                    </div>
+                                    <div style="background:#f8fafc; padding:1rem; border-radius:0.5rem;">
+                                        <h5 style="margin:0 0 0.5rem 0; color:#0ea5e9;">Signals To Emphasize</h5>
+                                        <ul style="margin:0; padding-left:1rem;">${(llm.signals||[]).map(s=>`<li>${s}</li>`).join('') || '<li>Outcome-first stories</li><li>Partnering across functions</li>'}</ul>
+                                    </div>
+                                </div>
+                                <div style="background:#f3e8ff; padding:1rem; border-radius:0.5rem; margin-top:1rem;">
+                                    <h5 style="margin:0 0 0.5rem 0; color:#7c3aed;">Panelist Context</h5>
+                                    <div style="font-size:0.95rem;">${panelistList}</div>
+                                </div>
+                                ${(llm.benefits||[]).length ? `<div style=\"background:#fff7ed; padding:1rem; border-radius:0.5rem; margin-top:1rem;\"><h5 style=\"margin:0 0 0.5rem 0; color:#f59e0b;\">Benefits Signals</h5><div>${(llm.benefits||[]).join(' · ')}</div></div>` : ''}
+                            </div>`;
+                        culturalDiv.innerHTML = html;
+                        appState.extractedData.culturalNotes = html;
+                        showToast('Cultural fit analysis generated (LLM-assisted)', 'success');
+                        return;
+                    }
+                }
+            } catch (e) { /* ignore */ }
+
+            // Work mode and pace
+            const workMode = (/hybrid/i.test(text) ? 'Hybrid' : /remote/i.test(text) ? 'Remote' : /on\s*site|onsite/i.test(text) ? 'Onsite' : '—');
+            const officeDays = (text.match(/(\d)\s*(?:days|day)\s*\/\s*week\s*in\s*office/i) || [])[1] || '';
+            const pace = (/fast[-\s]?paced|rapid(ly)?\s+growing|high\s+visibility/i.test(text) ? 'Fast-paced, high-visibility' : 'Balanced, outcomes-focused');
+
+            // Values/behaviors from text
+            const values = [];
+            if (/collaborat/i.test(text) || /cross[-\s]?functional/i.test(text)) values.push('Collaboration with cross-functional partners');
+            if (/data[-\s]?driven|evidence|metrics/i.test(text)) values.push('Data-driven decision making');
+            if (/customer|user[-\s]?centric/i.test(text)) values.push('Customer- and user-centric thinking');
+            if (/ownership|accountab/i.test(text)) values.push('Ownership and accountability');
+            if (/innovation|continuous\s+improve|kaizen|six\s*sigma/i.test(text)) values.push('Continuous improvement and innovation');
+            if (/communication|present/i.test(text)) values.push('Clear communication with executives');
+
+            // Benefits/comp signals (best-effort)
+            const benefits = [];
+            if (/health|dental|vision/i.test(text)) benefits.push('Health/Dental/Vision');
+            if (/bonus/i.test(text)) benefits.push('Annual Bonus');
+            if (/pto|paid\s+time\s+off|vacation/i.test(text)) benefits.push('PTO / Vacation');
+            if (/holiday/i.test(text)) benefits.push('Paid Holidays');
+
+            // Signals to emphasize based on tech/metrics/panelists
+            const signals = [];
+            if (tech.includes('SQL')) signals.push('Rigor with SQL and data validation');
+            if (tech.includes('Power BI') || tech.includes('Tableau') || tech.includes('Looker')) signals.push('Clarity in dashboard storytelling');
+            if (/BigQuery|Snowflake|Redshift/i.test(text)) signals.push('Scalable analytics on modern cloud DW');
+            if (metrics.length) signals.push(`Outcome orientation (e.g., ${metrics[0].value} ${metrics[0].label})`);
+            if (panelists.some(p=>/CIO|Chief|Director/i.test(p.role||''))) signals.push('Executive-ready communication');
+
+            const panelistList = panelists.map(p => `${p.name}${p.role?` — ${p.role}`:''}`).join('<br>') || 'Derived from JD when available';
+
+            const html = `
+                <div>
+                    <div style="display:flex; align-items:center; gap:0.5rem; margin-bottom:0.75rem;">${aiBadge()}<h4 style="margin:0; color:#0ea5e9;">Cultural Fit Signals${company?` — ${company}`:''}</h4></div>
+                    <div style="background:#f0fdf4; padding:1rem; border-radius:0.5rem; margin-bottom:1rem;">
+                        <strong>Work Style:</strong> ${workMode}${officeDays?` (${officeDays} days/week in office)`:''} · ${pace}
+                    </div>
+                    <div class="grid grid-2" style="gap:1rem;">
+                        <div style="background:#eff6ff; padding:1rem; border-radius:0.5rem;">
+                            <h5 style="margin:0 0 0.5rem 0; color:#2563eb;">What They Value</h5>
+                            <ul style="margin:0; padding-left:1rem;">
+                                ${(values.length?values:['Collaboration','Data-driven decisions','Clear communication']).map(v=>`<li>${v}</li>`).join('')}
+                            </ul>
+                        </div>
+                        <div style="background:#f8fafc; padding:1rem; border-radius:0.5rem;">
+                            <h5 style="margin:0 0 0.5rem 0; color:#0ea5e9;">Signals To Emphasize</h5>
+                            <ul style="margin:0; padding-left:1rem;">
+                                ${(signals.length?signals:['Outcome-first stories with numbers','Partnering across functions','Speed with quality']).map(s=>`<li>${s}</li>`).join('')}
+                            </ul>
+                        </div>
+                    </div>
+                    <div style="background:#f3e8ff; padding:1rem; border-radius:0.5rem; margin-top:1rem;">
+                        <h5 style="margin:0 0 0.5rem 0; color:#7c3aed;">Panelist Context</h5>
+                        <div style="font-size:0.95rem;">${panelistList}</div>
+                    </div>
+                    ${benefits.length ? `<div style=\"background:#fff7ed; padding:1rem; border-radius:0.5rem; margin-top:1rem;\"><h5 style=\"margin:0 0 0.5rem 0; color:#f59e0b;\">Benefits Signals</h5><div>${benefits.join(' · ')}</div></div>` : ''}
+                </div>`;
+
+            culturalDiv.innerHTML = html;
+            appState.extractedData.culturalNotes = html;
+            showToast('Cultural fit analysis generated from your files!', 'success');
         }
 
         async function generatePanelistQuestion(name) {
@@ -4690,6 +6220,61 @@ ${highlights.join('\n')}
             }
         }
 
+        // Merge strengths from any uploaded resume file (filename contains 'resume')
+        function mergeResumeStrengthsFromUploads() {
+            const entries = Object.entries(appState.fileContents || {});
+            const resumeEntries = entries.filter(([name]) => /resume/i.test(name));
+            if (!resumeEntries.length) return;
+            let resumeText = '';
+            resumeEntries.forEach(([name, content]) => { if (content) resumeText += '\n' + content; });
+            if (!resumeText.trim()) return;
+            const extra = extractStrengthsFromResumeText(resumeText) || [];
+            if (!extra.length) return;
+            const curr = Array.isArray(appState.extractedData.strengths) ? appState.extractedData.strengths : [];
+            const merged = Array.from(new Set([...curr, ...extra])).slice(0, 18);
+            appState.extractedData.strengths = merged;
+        }
+
+        // Infer role from uploaded resume files if not otherwise found
+        function inferRoleFromResumeUploads() {
+            const entries = Object.entries(appState.fileContents || {});
+            const resumeEntries = entries.filter(([name]) => /resume/i.test(name));
+            if (!resumeEntries.length) return '';
+            const combined = resumeEntries.map(([n,c]) => c || '').join('\n');
+            return inferRoleFromResumeText(combined);
+        }
+
+        function inferRoleFromResumeText(text) {
+            if (!text) return '';
+            const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+            // Common title patterns
+            const titleRx = new RegExp(
+                '(?:Senior|Lead|Principal|Staff|Sr\.?|Jr\.?)?\s*' +
+                '(?:BI|Business Intelligence|Data|Analytics|Reporting)\s*' +
+                '(?:Analyst|Engineer|Scientist|Manager|Architect)',
+                'i'
+            );
+            const genericRx = /(Analyst|Engineer|Scientist|Manager)/i;
+            // Prefer lines near the top or labeled Experience with dates
+            const dateRx = /(20\d{2}|201\d|202\d).*?(Present|Current|\d{4})/i;
+
+            // 1) Look for a line with title + dates (most recent experience)
+            const dated = lines.find(l => titleRx.test(l) && dateRx.test(l));
+            if (dated) return (dated.match(titleRx) || [''])[0].trim();
+
+            // 2) Look in the first 40 lines for a title match
+            for (let i = 0; i < Math.min(lines.length, 40); i++) {
+                const l = lines[i];
+                if (titleRx.test(l)) return (l.match(titleRx) || [''])[0].trim();
+            }
+
+            // 3) Fallback: any title line
+            const any = lines.find(l => titleRx.test(l) || genericRx.test(l));
+            if (any) return (any.match(titleRx) || any.match(genericRx) || [''])[0].trim();
+
+            return '';
+        }
+
         // Build metric tiles for the Command Center grid from key-metrics CSV
         async function loadMetricsForCommandCenter() {
             try {
@@ -5043,11 +6628,18 @@ ${highlights.join('\n')}
         }
 
         function determineArchetypeFromRole(role) {
-            const r = role.toLowerCase();
-            if (/scientist|engineer|architect|analyst/.test(r)) return 'Technical Expert';
-            if (/recruiter|talent|hr/.test(r)) return 'Ally';
-            if (/director|head|lead|manager/.test(r)) return 'Champion';
-            if (/program|operations|coordinator|gate/.test(r)) return 'Gatekeeper';
+            const r = String(role || '').toLowerCase();
+            // Ally: recruiting functions
+            if (/\b(recruiter|talent|hr|people\s*ops)\b/.test(r)) return 'Ally';
+            // Champion: executives and leadership
+            if (/\b(cio|cto|cfo|ceo|coo|cso|cmo|chief|vp|vice\s*president|president|director|head)\b/.test(r)) return 'Champion';
+            if (/\b(manager|lead|owner)\b/.test(r)) return 'Champion';
+            // Technical expert: hands-on technical roles
+            if (/\b(architect|engineer|developer|scientist|analyst|bi\s*architect|data\s+engineer|data\s+scientist)\b/.test(r)) return 'Technical Expert';
+            // Gatekeeper: coordination and process-centric roles
+            if (/\b(program\s*coordinator|operations|coordinator|gate\s*keep|compliance|procurement)\b/.test(r)) return 'Gatekeeper';
+            // Program Manager: treat as leadership by default
+            if (/\bprogram\s*manager\b/.test(r)) return 'Champion';
             return 'Ally';
         }
 
@@ -5314,40 +6906,124 @@ ${highlights.join('\n')}
         }
 
         // Interview Countdown Function
-        function initializeInterviewCountdown() {
-            // Interview date (ISO string for reliable parsing across browsers/timezones)
-            const interviewDate = new Date('2025-09-02T12:30:00-04:00');
-            
+        async function initializeInterviewCountdown() {
+            // Helper: parse "**Interview Date:** ..." from JD file and convert to Date with TZ
+            function tzAbbrevToOffset(abbrev) {
+                const map = {
+                    EDT: '-04:00', EST: '-05:00',
+                    PDT: '-07:00', PST: '-08:00',
+                    CDT: '-05:00', CST: '-06:00',
+                    MDT: '-06:00', MST: '-07:00'
+                };
+                return map[abbrev] || null;
+            }
+
+            function monthToNum(name) {
+                const m = {
+                    january: 1, february: 2, march: 3, april: 4, may: 5, june: 6,
+                    july: 7, august: 8, september: 9, october: 10, november: 11, december: 12
+                };
+                return m[name.toLowerCase()] || null;
+            }
+
+            function pad(n) { return String(n).padStart(2, '0'); }
+
+            function parseJDInterviewDate(raw) {
+                // Expect formats like: "Tuesday, September 4, 2025 | 5:00 PM EDT"
+                if (!raw) return null;
+                try {
+                    const cleaned = raw.replace(/^\s*[A-Za-z]+,\s*/, '').trim();
+                    const [datePart, timePartRaw] = cleaned.split('|').map(s => s.trim());
+                    if (!datePart || !timePartRaw) return null;
+
+                    // datePart: "September 4, 2025"
+                    const dp = datePart.match(/([A-Za-z]+)\s+(\d{1,2}),\s*(\d{4})/);
+                    if (!dp) return null;
+                    const month = monthToNum(dp[1]);
+                    const day = parseInt(dp[2], 10);
+                    const year = parseInt(dp[3], 10);
+                    if (!month || !day || !year) return null;
+
+                    // timePartRaw: "5:00 PM EDT" or "12:30 PM EDT"
+                    const tp = timePartRaw.match(/(\d{1,2}):(\d{2})\s*(AM|PM)\s*([A-Z]{2,4})?/i);
+                    if (!tp) return null;
+                    let hour = parseInt(tp[1], 10);
+                    const minute = parseInt(tp[2], 10);
+                    const ampm = tp[3].toUpperCase();
+                    const tzAbbrev = (tp[4] || '').toUpperCase();
+
+                    if (ampm === 'PM' && hour !== 12) hour += 12;
+                    if (ampm === 'AM' && hour === 12) hour = 0;
+
+                    const offset = tzAbbrevToOffset(tzAbbrev) || '-04:00'; // default to EDT if unspecified
+                    const iso = `${year}-${pad(month)}-${pad(day)}T${pad(hour)}:${pad(minute)}:00${offset}`;
+                    return { iso, display: raw.trim() };
+                } catch (e) {
+                    return null;
+                }
+            }
+
+            // Find JD file among uploaded files and parse date
+            const jdEntry = Object.entries(appState.fileContents).find(([name]) => /jd/i.test(name));
+            const countdownEl = document.getElementById('interviewCountdown');
+            const dateTextEl = document.getElementById('interviewDateText');
+            const labelEl = document.getElementById('interviewLabel');
+
+            if (!jdEntry) {
+                if (countdownEl) countdownEl.style.display = 'none';
+                return;
+            }
+
+            const jdText = jdEntry[1] || '';
+            const match = jdText.match(/(?:\*\*)?Interview Date:(?:\*\*)?\s*([^\n]+)/i);
+            if (!match || !match[1]) {
+                if (countdownEl) countdownEl.style.display = 'none';
+                return;
+            }
+
+            const parsed = parseJDInterviewDate(match[1]);
+            if (!parsed) {
+                if (countdownEl) countdownEl.style.display = 'none';
+                return;
+            }
+
+            const interviewDate = new Date(parsed.iso);
+            if (dateTextEl) dateTextEl.textContent = parsed.display;
+            if (labelEl) {
+                const c = appState?.extractedData?.company || '';
+                const r = appState?.extractedData?.role || '';
+                labelEl.textContent = (c || r) ? `${c}${c && r ? ' ' : ''}${r} Interview` : 'Interview Countdown';
+            }
+            if (countdownEl) countdownEl.style.display = '';
+
             function updateCountdown() {
                 const now = new Date();
                 const timeDiff = interviewDate - now;
-                
                 if (timeDiff <= 0) {
-                    document.getElementById('countdownDisplay').textContent = 'Interview Time!';
+                    const el = document.getElementById('countdownDisplay');
+                    if (el) el.textContent = 'Interview Time!';
                     return;
                 }
-                
                 const days = Math.floor(timeDiff / (1000 * 60 * 60 * 24));
                 const hours = Math.floor((timeDiff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
                 const minutes = Math.floor((timeDiff % (1000 * 60 * 60)) / (1000 * 60));
                 const seconds = Math.floor((timeDiff % (1000 * 60)) / 1000);
-                
                 let countdownText = '';
-                if (days > 0) {
-                    countdownText = `${days}d ${hours}h ${minutes}m`;
-                } else if (hours > 0) {
-                    countdownText = `${hours}h ${minutes}m ${seconds}s`;
-                } else {
-                    countdownText = `${minutes}m ${seconds}s`;
-                }
-                
-                document.getElementById('countdownDisplay').textContent = countdownText;
+                if (days > 0) countdownText = `${days}d ${hours}h ${minutes}m`;
+                else if (hours > 0) countdownText = `${hours}h ${minutes}m ${seconds}s`;
+                else countdownText = `${minutes}m ${seconds}s`;
+                const el = document.getElementById('countdownDisplay');
+                if (el) el.textContent = countdownText;
             }
-            
+
+            // Clear any previous countdown interval to avoid duplicates
+            if (window.__interviewCountdownInterval) {
+                clearInterval(window.__interviewCountdownInterval);
+            }
+
             // Update immediately and then every second
             updateCountdown();
             const countdownInterval = setInterval(() => {
-                // Stop updating if the countdown element is not visible or if interview has passed
                 const element = document.getElementById('countdownDisplay');
                 if (!element || interviewDate <= new Date()) {
                     clearInterval(countdownInterval);
@@ -5355,6 +7031,7 @@ ${highlights.join('\n')}
                 }
                 updateCountdown();
             }, 1000);
+            window.__interviewCountdownInterval = countdownInterval;
         }
         
         // Mobile Navigation Functions
