@@ -1,5 +1,14 @@
 # Changelog - Google Play Interview Prep Dashboard
 
+## Session: September 13, 2025
+
+### Bug Fixes
+
+#### 🐞 Fixed Panelist Extraction
+- **Problem:** Panelist names were not being extracted correctly because the search was limited to only Job Description files, while relevant information was often in other documents like Playbooks or Q&A files.
+- **Solution:** Modified the extraction logic to search the content of all uploaded files (except for resumes/CVs) when using AI-powered and link-rescue methods. This ensures a wider search scope.
+- **Impact:** Panelist extraction is now more robust and accurate, correctly identifying interviewers from any of the provided materials while still preventing the candidate's name from being included.
+
 ## Session: September 7, 2025
 
 ### Major Changes
