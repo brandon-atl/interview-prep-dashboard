@@ -1,5 +1,20 @@
 # Changelog - Google Play Interview Prep Dashboard
 
+## Session: September 17, 2025
+
+### Fixes
+- Corrected the question filter handler so search and interviewer inputs no longer overwrite the category selector with `[object Event]`, restoring reliable filtering across all controls.
+- Added defensive guards around question toggles and story details so missing DOM nodes or invalid indices no longer throw runtime errors during interaction.
+- Normalized STAR story metadata to honor both `fromDocument`/`fromDocuments`, restoring the "From Documents" badge for sample stories.
+- Rewired the sample data loader to call the existing question/story renderers instead of undefined helpers, preventing crashes when injecting the Google interview presets.
+- Hardened panelist parsing so failed JD extractions now fall back to Q&A and notes heuristics, keeping the Panel Strategy tab populated.
+
+### Enhancements
+- Added an optional Gemini API key form (with session-only storage) and forwarded the key via secure headers so users can enable LLM assists without redeploying the backend.
+- Potential Gaps to Address now derives from JD⇄resume comparisons and the Get Strategies action generates tailored mitigation plans instead of static tips.
+- The optional Gemini API key form now lives directly below the upload controls so users can enable assists before processing files.
+- Company intelligence now prioritizes "Intelligence" source files, enriches summaries via Gemini when a key is provided, and folds in resume-derived background plus strategic-doc strengths/gaps.
+
 ## Session: September 7, 2025
 
 ### Major Changes

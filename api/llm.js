@@ -10,8 +10,12 @@ export default async function handler(req, res) {
     if (!task || !text) {
       return res.status(400).json({ ok: false, error: 'Missing task or text' });
     }
-
-    const apiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || 'AIzaSyCphrGQrL-SDbcVkMn2NnvlQ1Fgnz4s4p8';
+    const headerKey = typeof req.headers['x-llm-key'] === 'string' ? req.headers['x-llm-key'].trim() : '';
+    const apiKey = headerKey || process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
+    if (!apiKey) {
+      // Not configured; report gracefully so frontend can fallback.
+      return res.status(501).json({ ok: false, error: 'LLM not configured' });
+    }
     const mdl = model || 'gemini-1.5-flash';
     const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${mdl}:generateContent?key=${apiKey}`;
 
@@ -131,6 +135,20 @@ Schema: ${schema}
 Text:\n${text}`;
     return { prompt, responseSchema: schema };
   }
+  if (task === 'companyIntel') {
+    const schema = `{"summary":"string|optional","focusAreas":["string"],"metrics":["string"],"risks":["string"],"opportunities":["string"]}`;
+    const prompt = `${common}
+Task: Summarize company intelligence relevant to the interview.
+Fields should be concise bullet-style phrases.
+- summary: 1-2 sentence executive overview.
+- focusAreas: top initiatives or priorities (list 3-6).
+- metrics: key quantitative facts (revenue, scale, growth etc.).
+- risks: notable risks or watchouts.
+- opportunities: growth levers or strategic opportunities.
+Schema: ${schema}
+Text:\n${text}`;
+    return { prompt, responseSchema: schema };
+  }
   const prompt = `${common}\nTask: Unknown. Return empty array.\nText:\n${text}`;
   return { prompt, responseSchema: '[]' };
 }
@@ -186,6 +204,15 @@ function postProcess(task, data) {
         values: Array.isArray(data.values) ? data.values : [],
         signals: Array.isArray(data.signals) ? data.signals : [],
         benefits: Array.isArray(data.benefits) ? data.benefits : []
+      };
+    }
+    if (task === 'companyIntel' && data && typeof data === 'object') {
+      return {
+        summary: data.summary ? String(data.summary).trim() : '',
+        focusAreas: Array.isArray(data.focusAreas) ? data.focusAreas.map(s => String(s).trim()).filter(Boolean) : [],
+        metrics: Array.isArray(data.metrics) ? data.metrics.map(s => String(s).trim()).filter(Boolean) : [],
+        risks: Array.isArray(data.risks) ? data.risks.map(s => String(s).trim()).filter(Boolean) : [],
+        opportunities: Array.isArray(data.opportunities) ? data.opportunities.map(s => String(s).trim()).filter(Boolean) : []
       };
     }
   } catch { /* ignore */ }

@@ -12,13 +12,19 @@
                 metrics: [],
                 strengths: [],
                 gaps: [],
+                gapDetails: [],
                 panelists: [],
                 panelistQuestions: {},
                 questions: [],
                 stories: [],
                 companyIntel: '',
+                companyIntelSource: '',
+                candidateBackground: '',
                 culturalNotes: ''
-            }
+            },
+            llmApiKey: '',
+            llmKeyRemember: false,
+            llmConfigWarningShown: false
         };
 
         // Metrics are not initialized on load; will render after file upload.
@@ -26,6 +32,7 @@
         // Initialize
 document.addEventListener('DOMContentLoaded', async function() {
             setupEventListeners();
+            initializeLlmControls();
             
             // Disable tabs until data is uploaded
             setTabsEnabled(false);
@@ -301,6 +308,9 @@ document.addEventListener('DOMContentLoaded', async function() {
                         break;
                     case 'gen-panelist-question':
                         if (el.dataset.name) generatePanelistQuestion(el.dataset.name);
+                        break;
+                    case 'clear-llm-key':
+                        clearLlmKey();
                         break;
                     case 'toggle-question':
                         if (el.dataset.index) toggleQuestionDetail(el.dataset.index);
@@ -695,6 +705,33 @@ GROUP BY previous_tier, current_tier;`;
             return Object.values(appState.fileContents || {}).join('\n');
         }
 
+        function getFileContentsByPattern(regex) {
+            const entries = Object.entries(appState.fileContents || {});
+            return entries
+                .filter(([name]) => regex.test(String(name || '').toLowerCase()))
+                .map(([, content]) => (content || '').toString())
+                .join('\n');
+        }
+
+        function deriveCandidateBackground(resumeText) {
+            if (!resumeText) return '';
+            const text = String(resumeText);
+            const summaryMatch = text.match(/(?:Professional\s+Summary|Summary|Profile|About)\s*[:\n]+([\s\S]{0,600})/i);
+            if (summaryMatch) {
+                const section = summaryMatch[1].split(/\n{2,}/)[0].trim();
+                if (section) return section.replace(/\n+/g, ' ');
+            }
+
+            const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+            const sentenceLines = lines.filter(l => /\w/.test(l)).slice(0, 6);
+            const bulletLines = sentenceLines.filter(l => /^[•\-\*]/.test(l)).map(l => l.replace(/^[•\-\*]\s*/, ''));
+            if (bulletLines.length >= 2) {
+                return bulletLines.slice(0, 3).join(' ');
+            }
+            const paragraph = sentenceLines.join(' ');
+            return paragraph.length > 0 ? paragraph : '';
+        }
+
         function deriveTechStack(text) {
             const terms = [
                 'SQL','BigQuery','Snowflake','Redshift','PostgreSQL','MySQL','SQLite','Oracle','PL/SQL',
@@ -819,6 +856,7 @@ GROUP BY previous_tier, current_tier;`;
             if (!appState.hasSQL) { card.style.display = 'none'; return; }
             const text = getCombinedContent();
             const metrics = appState.extractedData.metrics || [];
+            const gapDetails = Array.isArray(appState.extractedData.gapDetails) ? appState.extractedData.gapDetails : [];
             const gaps = appState.extractedData.gaps || [];
             const panelists = appState.extractedData.panelists || [];
             const tech = deriveTechStack(text).slice(0,6);
@@ -834,7 +872,7 @@ GROUP BY previous_tier, current_tier;`;
             let queryVol = '—';
             const volMatch = text.match(/(\d+(?:\.\d+)?\s*(?:B|M|K)\+?)\s+(queries|transactions|events|rows|records)/i);
             if (volMatch) queryVol = `${volMatch[1]} ${volMatch[2]}`;
-            const challenge = gaps[0] || (focus[0] || '—');
+            const challenge = (gapDetails[0]?.title) || gaps[0] || (focus[0] || '—');
             const interviewers = panelists.slice(0,3).map(p => p.name).filter(Boolean).join(', ') || '—';
 
             // Rewrite the inner grid content while preserving title
@@ -948,23 +986,97 @@ GROUP BY previous_tier, current_tier;`;
         }
 
         // Build a company intel markdown summary from uploaded content
-        function extractCompanyIntelAgnostic(content) {
+        async function extractCompanyIntelAgnostic() {
             const company = cleanCompanyDisplayName(appState.extractedData.company || '') || '';
             const role = cleanRoleTitle(appState.extractedData.role || '') || '';
-            const tech = deriveTechStack(content);
-            const strengths = appState.extractedData.strengths || [];
-            const gaps = appState.extractedData.gaps || [];
-            const metrics = appState.extractedData.metrics || [];
 
-            const metricsMd = metrics.slice(0,8).map(m => `- ${m.label}: ${m.value}${m.growth?` (${m.growth})`:''}${m.context?` — ${m.context}`:''}`).join('\n') || '- Add a metrics CSV or include metrics in your docs';
-            const strengthsMd = strengths.slice(0,6).map(s=>`- ${s}`).join('\n') || '- Add strengths in your materials to populate';
-            const gapsMd = gaps.slice(0,5).map(g=>`- ${g}`).join('\n') || '- Add areas to improve to populate';
+            const intelText = getFileContentsByPattern(/intelligence/i).trim();
+            const resumeText = getFileContentsByPattern(/resume|curriculum\s*vitae|cv/i);
+            const strategyText = getFileContentsByPattern(/strategic\s*foundation|experience\s*map|gemini/i);
+            const fallback = getCombinedContent();
+            const sourceText = intelText || strategyText || fallback;
 
-            const md = `## Executive Brief\n\n**Company:** ${company || '—'}  \\
-**Role:** ${role || '—'}\n\n### Detected Tech Stack\n${tech.length ? tech.map(t=>`- ${t}`).join('\n') : '- Tech signals will appear when detected'}\n\n### Key Metrics\n${metricsMd}\n\n### Strengths\n${strengthsMd}\n\n### Potential Gaps\n${gapsMd}`;
+            const derivedBackground = appState.extractedData.candidateBackground || deriveCandidateBackground(resumeText);
+            if (derivedBackground) {
+                appState.extractedData.candidateBackground = derivedBackground;
+            }
+
+            const tech = deriveTechStack(sourceText);
+            const strengths = Array.isArray(appState.extractedData.strengths) ? appState.extractedData.strengths : [];
+            const gapDetails = Array.isArray(appState.extractedData.gapDetails) ? appState.extractedData.gapDetails : [];
+            const metrics = Array.isArray(appState.extractedData.metrics) ? appState.extractedData.metrics : [];
+
+            const takeTop = (arr, count = 6) => Array.from(new Set(arr.filter(Boolean))).slice(0, count);
+            const metricsText = takeTop(metrics.map(m => {
+                if (!m || !m.label || !m.value) return '';
+                const growth = m.growth ? ` (${m.growth})` : '';
+                const context = m.context ? ` — ${m.context}` : '';
+                return `${m.label}: ${m.value}${growth}${context}`;
+            }), 8);
+            const strengthsList = takeTop(strengths, 6);
+            const gapsList = takeTop(gapDetails.map(d => d.title || ''), 5);
+
+            const defaultFocus = [];
+            if (/play\s*points/i.test(sourceText)) defaultFocus.push('Play Points loyalty growth & tier optimization');
+            if (/android/i.test(sourceText)) defaultFocus.push('Android ecosystem scale & developer enablement');
+            if (/ai|machine learning|gemini/i.test(sourceText)) defaultFocus.push('AI & Gemini acceleration across Google Play');
+            if (/revenue|monetization/i.test(sourceText)) defaultFocus.push('Monetization and revenue efficiency');
+            if (!defaultFocus.length) defaultFocus.push('Customer engagement & scalable analytics');
+
+            const defaultRisks = [];
+            if (/regulat|dma|compliance|lawsuit/i.test(sourceText)) defaultRisks.push('Regulatory pressure (DMA, antitrust, payment policies)');
+            if (/competition|apple|app store/i.test(sourceText)) defaultRisks.push('Competitive pressure from Apple App Store');
+            if (/churn|retention/i.test(sourceText)) defaultRisks.push('Member churn / retention headwinds');
+            if (!defaultRisks.length) defaultRisks.push('Maintain data reliability & stakeholder trust');
+
+            const defaultOpportunities = [];
+            if (/expansion|international|global/i.test(sourceText)) defaultOpportunities.push('International expansion and localization gains');
+            if (/personalization|ai|ml/i.test(sourceText)) defaultOpportunities.push('AI-powered personalization for loyalty members');
+            if (/streaming|real[-\s]?time/i.test(sourceText)) defaultOpportunities.push('Real-time analytics and proactive interventions');
+            if (!defaultOpportunities.length) defaultOpportunities.push('Cross-functional storytelling with quantified impact');
+
+            let llmIntel = null;
+            try {
+                if (window.__LLM_ENABLED__ && sourceText.trim()) {
+                    llmIntel = await llmExtract('companyIntel', sourceText.slice(0, 12000));
+                }
+            } catch (e) { /* ignore */ }
+
+            const summary = llmIntel?.summary || (sourceText ? sourceText.split(/\n\s*\n/)[0].replace(/\n+/g, ' ').slice(0, 400) : '');
+            const focusAreas = takeTop(llmIntel?.focusAreas || defaultFocus, 6);
+            const opportunities = takeTop(llmIntel?.opportunities || defaultOpportunities, 5);
+            const risks = takeTop(llmIntel?.risks || defaultRisks, 5);
+            const metricHighlights = takeTop(llmIntel?.metrics || [], 6);
+
+            const summaryBlock = summary ? `> ${summary}\n\n` : '';
+            const focusMd = focusAreas.map(f => `- ${f}`).join('\n');
+            const riskMd = risks.map(r => `- ${r}`).join('\n');
+            const opportunityMd = opportunities.map(o => `- ${o}`).join('\n');
+            const metricsMd = (metricHighlights.length ? metricHighlights : metricsText).map(m => `- ${m}`).join('\n') || '- Provide metrics in your materials to populate this section';
+            const strengthsMd = strengthsList.length ? strengthsList.map(s => `- ${s}`).join('\n') : '- Add strengths in your materials to populate';
+            const gapsMd = gapsList.length ? gapsList.map(g => `- ${g}`).join('\n') : '- Populate strategic documents to surface gaps to address';
+            const backgroundMd = derivedBackground ? derivedBackground.replace(/\n+/g, ' ') : '';
+
+            const techMd = tech.length ? tech.map(t => `- ${t}`).join('\n') : '- Tech signals will appear when detected';
+
+            let md = `## Executive Brief\n\n${summaryBlock}**Company:** ${company || '—'}  \\
+**Role:** ${role || '—'}\n\n### Strategic Focus Areas\n${focusMd}`;
+            md += `\n\n### Detected Tech Stack\n${techMd}`;
+            md += `\n\n### Key Metrics\n${metricsMd}`;
+            md += `\n\n### Candidate Background\n${backgroundMd ? `- ${backgroundMd}` : '- Add a resume to surface your background summary'}`;
+            md += `\n\n### Strengths\n${strengthsMd}`;
+            md += `\n\n### Potential Gaps\n${gapsMd}`;
+            md += `\n\n### Risks & Watchouts\n${riskMd}`;
+            md += `\n\n### Opportunities\n${opportunityMd}`;
+
+            const sourceLabel = intelText
+                ? `Intelligence files${llmIntel ? ' (LLM-assisted)' : ''}`
+                : strategyText
+                    ? 'Strategic documents'
+                    : 'Uploaded materials';
 
             appState.extractedData.companyIntel = md;
-            appState.extractedData.companyIntelSource = 'Uploaded Materials';
+            appState.extractedData.companyIntelSource = sourceLabel;
         }
 
         // Small helper to render a consistent AI badge in templates
@@ -986,6 +1098,104 @@ GROUP BY previous_tier, current_tier;`;
             });
             __scriptCache.set(src, p);
             return p;
+        }
+
+        // Lightweight client helper to call our optional /api/llm endpoint.
+        // Returns parsed data or null on any error/unavailability.
+        async function llmExtract(task, text, model) {
+            try {
+                if (!window.__LLM_ENABLED__) return null;
+                // Avoid calling API when running directly from file://
+                if (typeof window !== 'undefined' && String(window.location.protocol).startsWith('file')) return null;
+                const headers = { 'Content-Type': 'application/json' };
+                if (appState.llmApiKey) {
+                    headers['X-LLM-Key'] = appState.llmApiKey;
+                }
+                const res = await fetch('/api/llm', {
+                    method: 'POST',
+                    headers,
+                    body: JSON.stringify({ task, text, model }),
+                    credentials: 'same-origin'
+                });
+                if (res.status === 501) {
+                    if (!appState.llmConfigWarningShown) {
+                        try { showToast('LLM assist not configured. Add a Gemini API key to enable AI features.', 'warning'); } catch (e) {}
+                        appState.llmConfigWarningShown = true;
+                    }
+                    return null;
+                }
+                if (!res.ok) return null;
+                const json = await res.json().catch(() => null);
+                if (!json || json.ok !== true) return null;
+                return json.data || null;
+            } catch (e) {
+                return null;
+            }
+        }
+
+        function updateLlmKeyStatus() {
+            const statusEl = document.getElementById('llmKeyStatus');
+            if (!statusEl) return;
+            const hasKey = !!appState.llmApiKey;
+            statusEl.textContent = hasKey
+                ? 'LLM assist enabled. Optional AI enrichments will use your key until you clear it.'
+                : 'LLM assist is currently disabled. Deterministic parsing only.';
+            statusEl.style.color = hasKey ? '#15803d' : '#64748b';
+        }
+
+        function setLlmApiKey(rawKey, { persist = false, silent = false } = {}) {
+            const key = String(rawKey || '').trim();
+            appState.llmApiKey = key;
+            appState.llmKeyRemember = !!(persist && key);
+            appState.llmConfigWarningShown = false;
+            const input = document.getElementById('llmKeyInput');
+            if (input && input.value !== key) input.value = key;
+            const remember = document.getElementById('llmKeyRemember');
+            if (remember) remember.checked = !!(persist && key);
+            if (persist && key) {
+                try { sessionStorage.setItem('dashboard.llmKey', key); } catch (e) {}
+            } else {
+                try { sessionStorage.removeItem('dashboard.llmKey'); } catch (e) {}
+            }
+            updateLlmKeyStatus();
+            if (!silent) {
+                if (key) {
+                    try { showToast('LLM assist enabled for this session.', 'success'); } catch (e) {}
+                } else {
+                    try { showToast('LLM assist disabled. Falling back to deterministic parsing.', 'info'); } catch (e) {}
+                }
+            }
+        }
+
+        function handleLlmKeySubmit(event) {
+            event.preventDefault();
+            const form = event.target;
+            const input = form.querySelector('#llmKeyInput');
+            const remember = form.querySelector('#llmKeyRemember');
+            const key = input ? input.value : '';
+            const persist = !!(remember && remember.checked);
+            setLlmApiKey(key, { persist });
+        }
+
+        function clearLlmKey() {
+            setLlmApiKey('', { persist: false });
+        }
+
+        function initializeLlmControls() {
+            const form = document.getElementById('llmKeyForm');
+            if (form) {
+                form.addEventListener('submit', handleLlmKeySubmit);
+            }
+            try {
+                const stored = sessionStorage.getItem('dashboard.llmKey');
+                if (stored) {
+                    setLlmApiKey(stored, { persist: true, silent: true });
+                } else {
+                    updateLlmKeyStatus();
+                }
+            } catch (e) {
+                updateLlmKeyStatus();
+            }
         }
 
         async function ensurePapaParse() {
@@ -1347,9 +1557,23 @@ GROUP BY previous_tier, current_tier;`;
                             appState.extractedData.strengths = Array.from(curr).slice(0, 18);
                         }
                         if (Array.isArray(sg.gaps)) {
-                            const currG = new Set((appState.extractedData.gaps||[]));
-                            sg.gaps.forEach(s => currG.add(s));
-                            appState.extractedData.gaps = Array.from(currG).slice(0, 12);
+                            const existingDetails = Array.isArray(appState.extractedData.gapDetails) ? appState.extractedData.gapDetails.slice() : [];
+                            const seen = new Set(existingDetails.map(d => (d.title || '').toLowerCase()));
+                            sg.gaps.forEach(raw => {
+                                const title = String(raw || '').trim();
+                                if (!title) return;
+                                const key = title.toLowerCase();
+                                if (seen.has(key)) return;
+                                existingDetails.push({
+                                    title,
+                                    reason: 'Identified by LLM analysis of your materials.',
+                                    mitigation: 'Prepare how you will bridge this area (ramp plan, transferable project, or quick case study).'
+                                });
+                                seen.add(key);
+                            });
+                            const limited = existingDetails.slice(0, 8);
+                            appState.extractedData.gapDetails = limited;
+                            appState.extractedData.gaps = limited.map(detail => detail.title);
                         }
                     }
                 }
@@ -1371,7 +1595,7 @@ GROUP BY previous_tier, current_tier;`;
             } catch (e) { /* ignore */ }
             
             // Extract company intelligence (agnostic)
-            extractCompanyIntelAgnostic(combinedContent);
+            await extractCompanyIntelAgnostic();
 
             // Fallback: infer role from resume if not already set
             try {
@@ -1456,6 +1680,7 @@ GROUP BY previous_tier, current_tier;`;
         async function extractPanelistsFromJDUploads() {
             const entries = Object.entries(appState.fileContents || {});
             const dbg = { viaLinkedIn: [], viaBullets: [], viaFallback: [], viaLLM: [], viaRescue: [], final: [] };
+            if (!Array.isArray(appState.extractedData.panelists)) appState.extractedData.panelists = [];
             // Prefer files likely to be JD
             // Only consider canonical JD files; avoid Q&A/Interview banks that include the word "interview"
             const jdEntries = entries.filter(([name]) => /\b(jd|job\s*description)\b/i.test(name));
@@ -1520,9 +1745,27 @@ GROUP BY previous_tier, current_tier;`;
             filtered = filtered.sort((a,b) => score(b)-score(a));
             if (filtered.length) {
                 appState.extractedData.panelists = filtered;
+            } else {
+                // If JD parsing fails, fall back to the broader Q&A/notes heuristics so panel strategy still populates.
+                const combined = getCombinedContent ? getCombinedContent() : '';
+                if (combined) {
+                    const priorCount = (appState.extractedData.panelists || []).length;
+                    try { extractPanelistDetailsFromQA(combined); } catch (e) { /* ignore */ }
+                    let afterCount = (appState.extractedData.panelists || []).length;
+                    if (afterCount === priorCount) {
+                        try { extractInterviewerInfo(combined); } catch (e) { /* ignore */ }
+                        afterCount = (appState.extractedData.panelists || []).length;
+                    }
+                    if (afterCount === priorCount) {
+                        appState.extractedData.panelists = [];
+                    }
+                } else {
+                    appState.extractedData.panelists = [];
+                }
             }
+            const finalPanelists = Array.isArray(appState.extractedData.panelists) ? appState.extractedData.panelists : [];
             // Save debug snapshot
-            try { window.__PANELIST_DEBUG__ = { ...dbg, final: filtered }; } catch (e) {}
+            try { window.__PANELIST_DEBUG__ = { ...dbg, final: finalPanelists }; } catch (e) {}
         }
 
         function renderPanelistDebug() {
@@ -2045,10 +2288,19 @@ GROUP BY previous_tier, current_tier;`;
             
             // Update gaps
             const gapsList = document.getElementById('gapsList');
-            if (gapsList && data.gaps.length > 0) {
-                gapsList.innerHTML = data.gaps.map(gap => 
-                    `<div class="gap-item">→ ${gap}</div>`
-                ).join('');
+            if (gapsList) {
+                const gapDetails = Array.isArray(data.gapDetails) ? data.gapDetails : [];
+                if (gapDetails.length > 0) {
+                    gapsList.innerHTML = gapDetails.map(detail => {
+                        const reason = detail.reason ? `<div style="font-size:0.8rem; color:#64748b; margin-top:0.25rem;">${detail.reason}</div>` : '';
+                        return `<div class="gap-item" style="margin-bottom:0.5rem;">
+                            <strong>→ ${detail.title}</strong>
+                            ${reason}
+                        </div>`;
+                    }).join('');
+                } else {
+                    gapsList.innerHTML = '<p style="color:#64748b;">No potential gaps detected yet.</p>';
+                }
             }
         }
 
@@ -2499,7 +2751,7 @@ GROUP BY previous_tier, current_tier;`;
                 const files = [];
                 for (const relPath of manifest) {
                     try {
-                        const url = relPath;
+                        const url = encodeURI(relPath);
                         const ext = url.split('.').pop().toLowerCase();
                         const typeMap = {
                             pdf: 'application/pdf',
@@ -2760,7 +3012,9 @@ GROUP BY previous_tier, current_tier;`;
                 return;
             }
             
-            container.innerHTML = appState.extractedData.stories.map((story, index) => `
+            container.innerHTML = appState.extractedData.stories.map((story, index) => {
+                const fromDocs = story.fromDocument || story.fromDocuments;
+                return `
                 <div style="padding: 1rem; background: #f8fafc; border-radius: 0.5rem; margin-bottom: 1rem; cursor: pointer;" 
                      data-action="story-show" data-index="${index}">
                     <div style="display: flex; justify-content: space-between; align-items: start;">
@@ -2768,11 +3022,12 @@ GROUP BY previous_tier, current_tier;`;
                             <h4 style="font-weight: 600;">${story.title}</h4>
                             <p style="font-size: 0.875rem; color: #64748b;">Problem: ${story.problem || 'Click to view'}</p>
                             <p style="font-size: 0.875rem; color: #4f46e5; font-weight: 600;">Metric: ${story.metric || 'N/A'}</p>
-                            ${story.fromDocument ? '<span style="display: inline-block; padding: 0.125rem 0.5rem; background: #22c55e; color: white; border-radius: 9999px; font-size: 0.625rem; margin-top: 0.5rem;">FROM DOCUMENTS</span>' : ''}
+                            ${fromDocs ? '<span style="display: inline-block; padding: 0.125rem 0.5rem; background: #22c55e; color: white; border-radius: 9999px; font-size: 0.625rem; margin-top: 0.5rem;">FROM DOCUMENTS</span>' : ''}
                         </div>
                     </div>
                 </div>
-            `).join('');
+            `;
+            }).join('');
         }
 
         // Simple function to convert basic markdown to HTML
@@ -2791,12 +3046,17 @@ GROUP BY previous_tier, current_tier;`;
         }
 
         function showStoryDetail(index) {
-            const story = appState.extractedData.stories[index];
+            const idx = Number(index);
+            if (Number.isNaN(idx)) return;
+            const story = (appState.extractedData.stories || [])[idx];
+            if (!story) return;
             const detailDiv = document.getElementById('storyDetail');
-            
+            if (!detailDiv) return;
+            const fromDocs = story.fromDocument || story.fromDocuments;
+
             detailDiv.innerHTML = `
                 <h3 style="font-weight: 600; margin-bottom: 1rem;">${story.title}</h3>
-                ${story.fromDocument ? '<span style="display: inline-block; padding: 0.125rem 0.5rem; background: #22c55e; color: white; border-radius: 9999px; font-size: 0.625rem; margin-bottom: 1rem;">FROM DOCUMENTS</span>' : ''}
+                ${fromDocs ? '<span style="display: inline-block; padding: 0.125rem 0.5rem; background: #22c55e; color: white; border-radius: 9999px; font-size: 0.625rem; margin-bottom: 1rem;">FROM DOCUMENTS</span>' : ''}
                 <div style="background: #f8fafc; padding: 1rem; border-radius: 0.5rem; margin-bottom: 1rem;">
                     <strong>Situation:</strong> ${convertMarkdownToHtml(story.situation)}
                 </div>
@@ -2834,10 +3094,23 @@ GROUP BY previous_tier, current_tier;`;
             }
         }
 
-        function filterQuestions(category) {
-            if (category) {
-                document.getElementById('questionCategory').value = category;
+        function filterQuestions(categoryOrEvent) {
+            let categoryToApply = '';
+
+            if (typeof categoryOrEvent === 'string') {
+                categoryToApply = categoryOrEvent;
+            } else if (categoryOrEvent && typeof categoryOrEvent === 'object') {
+                const { target } = categoryOrEvent;
+                if (target && target.id === 'questionCategory') {
+                    categoryToApply = target.value;
+                }
             }
+
+            if (categoryToApply) {
+                const select = document.getElementById('questionCategory');
+                if (select) select.value = categoryToApply;
+            }
+
             updateQuestionList();
         }
 
@@ -3708,78 +3981,238 @@ GROUP BY previous_tier, current_tier;`;
             }
         }
         
-        // Extract strengths and gaps
+        // Extract strengths and dynamically infer potential gaps from uploaded materials
         function extractStrengthsAndGaps(content) {
             const strengths = [];
-            const gaps = [];
-            
-            // Technical strengths
-            if (content.match(/8\+?\s*years?\s*SQL/i)) {
-                strengths.push('8+ years advanced SQL expertise (CTEs, window functions, optimization)');
+            const files = appState.fileContents || {};
+            const entries = Object.entries(files);
+
+            const jdText = entries
+                .filter(([name]) => /\b(jd|job\s*description|requisition|posting)\b/i.test(name))
+                .map(([, text]) => text || '')
+                .join('\n');
+            const resumeText = entries
+                .filter(([name]) => /resume|curriculum\s*vitae|cv/i.test(name))
+                .map(([, text]) => text || '')
+                .join('\n');
+            const supplementalText = entries
+                .filter(([name]) => !/\b(jd|job\s*description|requisition|posting)\b/i.test(name) && !/resume|curriculum\s*vitae|cv/i.test(name))
+                .map(([, text]) => text || '')
+                .join('\n');
+
+            const strategyText = entries
+                .filter(([name]) => /strategic\s*foundation|experience\s*map|gemini/i.test(name))
+                .map(([, text]) => text || '').join('\n');
+
+            const combinedText = strategyText.trim() ? strategyText : String(content || '');
+            const candidateText = resumeText || supplementalText || combinedText;
+            const candidateLower = candidateText.toLowerCase();
+            const combinedLower = (candidateText + '\n' + supplementalText + '\n' + combinedText).toLowerCase();
+            const rawJdLower = jdText ? jdText.toLowerCase() : '';
+            const jdLower = (jdText || combinedText).toLowerCase();
+
+            const candidateBackground = deriveCandidateBackground(resumeText);
+            if (candidateBackground) {
+                appState.extractedData.candidateBackground = candidateBackground;
             }
-            if (content.match(/BigQuery/i) && content.match(/500M\+/i)) {
-                strengths.push('BigQuery experience with 500M+ SKU records at Home Depot');
+
+            const pushStrength = (value) => {
+                if (value && !strengths.includes(value)) strengths.push(value);
+            };
+
+            // Technical strengths (derived from explicit signals in the materials)
+            if (/8\+?\s*years?\s*sql/i.test(combinedText)) {
+                pushStrength('8+ years advanced SQL expertise (CTEs, window functions, optimization)');
             }
-            if (content.match(/Python/i) && content.match(/pipeline/i)) {
-                strengths.push('Python pipelines processing 100M+ daily records');
+            if (/bigquery/i.test(combinedText) && /500m\+/i.test(combinedText)) {
+                pushStrength('BigQuery experience operating over 500M+ record datasets');
             }
-            if (content.match(/Power BI|Tableau|Looker/i)) {
-                strengths.push('Dashboard development (Power BI, Tableau, Looker)');
+            if (/python/i.test(combinedText) && /pipeline/i.test(combinedText)) {
+                pushStrength('Python pipelines processing 100M+ daily records');
             }
-            
+            if (/(power\s*bi|tableau|looker|superset|data studio)/i.test(combinedText)) {
+                pushStrength('Dashboard development across modern BI platforms');
+            }
+
             // Business impact strengths
-            if (content.match(/12%\s*(?:retention|improvement)/i)) {
-                strengths.push('12% customer retention improvement = $3.2M revenue impact');
+            if (/12%\s*(?:retention|improvement)/i.test(combinedText)) {
+                pushStrength('12% customer retention improvement delivering $3.2M revenue impact');
             }
-            if (content.match(/80%\s*(?:manual|reduction|automation)/i)) {
-                strengths.push('80% manual effort reduction = $2M annual savings');
+            if (/80%\s*(?:manual|reduction|automation)/i.test(combinedText)) {
+                pushStrength('80% manual effort reduction translating to multimillion-dollar savings');
             }
-            if (content.match(/30%\s*adoption/i)) {
-                strengths.push('30% dashboard adoption increase across 200+ stakeholders');
+            if (/30%\s*adoption/i.test(combinedText)) {
+                pushStrength('30% dashboard adoption increase across 200+ stakeholders');
             }
-            if (content.match(/95%\s*(?:query|optimization)/i)) {
-                strengths.push('95% query optimization (10 min → 30 sec)');
+            if (/95%\s*(?:query|optimization|latency)/i.test(combinedText)) {
+                pushStrength('95% query optimization (10 minutes → 30 seconds)');
             }
-            
-            // Scale experience
-            if (content.match(/500M\+\s*(?:SKU|records)/i)) {
-                strengths.push('500M+ SKU records monthly processing');
+
+            // Scale experience strengths
+            if (/500m\+\s*(?:sku|record)/i.test(combinedText)) {
+                pushStrength('500M+ record data warehousing experience');
             }
-            if (content.match(/100M\+\s*daily/i)) {
-                strengths.push('100M+ daily transactions at scale');
+            if (/100m\+\s*(?:daily|transactions|events)/i.test(combinedText)) {
+                pushStrength('100M+ daily transactions ingestion at scale');
             }
-            if (content.match(/2,?000\+\s*stores/i)) {
-                strengths.push('2,000+ stores data consolidation');
+            if (/2,?000\+\s*stores/i.test(combinedText)) {
+                pushStrength('Analytics supporting 2,000+ retail locations');
             }
-            
-            // Soft skills
-            if (content.match(/cross-functional/i) && content.match(/stakeholder/i)) {
-                strengths.push('Cross-functional collaboration (Product, Marketing, Engineering)');
+
+            // Soft skills strengths
+            if (/cross[-\s]?functional/i.test(combinedText) && /stakeholder/i.test(combinedText)) {
+                pushStrength('Cross-functional stakeholder collaboration (Product, Marketing, Engineering)');
             }
-            if (content.match(/C-(?:suite|level)|executive/i)) {
-                strengths.push('Executive presentation and C-suite communication');
+            if (/c-(?:suite|level)|executive/i.test(combinedText)) {
+                pushStrength('Executive presentation and C-suite communication');
             }
-            if (content.match(/50\+\s*(?:training|sessions)/i)) {
-                strengths.push('Training and mentoring (50+ sessions delivered)');
+            if (/50\+\s*(?:training|sessions)/i.test(combinedText)) {
+                pushStrength('Coaching & enablement (50+ training sessions delivered)');
             }
-            
-            // Extract gaps and mitigation strategies
-            if (content.match(/PLX/i) && content.match(/limited|no\s+direct/i)) {
-                gaps.push('Limited PLX/Google Sheets BI Experience → Core BI skills transfer, will complete Google certificate');
-            }
-            if (content.match(/loyalty\s+program/i) && content.match(/no\s+direct/i)) {
-                gaps.push('No direct loyalty program experience → Customer segmentation work directly parallels');
-            }
-            if (content.match(/contractor/i) && content.match(/FTE/i)) {
-                gaps.push('Contractor vs FTE role → Immediate value delivery while proving fit for conversion');
-            }
-            
-            if (strengths.length > 0) {
-                appState.extractedData.strengths = strengths;
-            }
-            if (gaps.length > 0) {
-                appState.extractedData.gaps = gaps;
-            }
+
+            // --- Dynamic gap inference ---
+            const gapDetails = [];
+            const seenGaps = new Set();
+
+            const firstMatch = (text, keywords = []) => {
+                if (!text) return null;
+                for (const key of keywords) {
+                    if (text.includes(String(key).toLowerCase())) return key;
+                }
+                return null;
+            };
+
+            const addGapDetail = (title, reason, mitigation, id) => {
+                const key = (id || title || '').toLowerCase();
+                if (!title || seenGaps.has(key)) return;
+                gapDetails.push({ title, reason, mitigation });
+                seenGaps.add(key);
+            };
+
+            const gapRules = [
+                {
+                    id: 'modern_bi',
+                    label: 'Modern BI tooling (Looker/LookML)',
+                    jdKeywords: ['looker', 'lookml', 'looker studio', 'lookerstudio'],
+                    resumeKeywords: ['looker', 'lookml', 'looker studio', 'look ml'],
+                    mitigation: 'Connect your Tableau/Power BI experience to Looker workflows and share a concrete ramp plan (sandbox project, course, documentation deep dive).'
+                },
+                {
+                    id: 'dbt',
+                    label: 'dbt or modular SQL transformations',
+                    jdKeywords: ['dbt', 'data build tool', 'semantic layer'],
+                    resumeKeywords: ['dbt', 'data build tool', 'semantic layer'],
+                    mitigation: 'Highlight your data modeling approach and outline how you are leveling up on dbt (courses, certification, mini project).'
+                },
+                {
+                    id: 'orchestration',
+                    label: 'Workflow orchestration (Airflow/Dagster/Prefect)',
+                    jdKeywords: ['airflow', 'dagster', 'prefect', 'cloud composer', 'scheduler', 'orchestration'],
+                    resumeKeywords: ['airflow', 'dagster', 'prefect', 'composer', 'scheduler', 'orchestration'],
+                    mitigation: 'Tie similar automation you have built to the named platform and describe your ramp plan (tutorials, sandbox DAGs).'
+                },
+                {
+                    id: 'experimentation',
+                    label: 'Experimentation & A/B testing',
+                    jdKeywords: ['a/b', 'ab test', 'experiment', 'hypothesis', 'multivariate'],
+                    resumeKeywords: ['a/b', 'ab test', 'experiment', 'hypothesis', 'multivariate'],
+                    mitigation: 'Prepare a story that shows how you validate ideas with experiments or outline the framework you would use.'
+                },
+                {
+                    id: 'ml_ai',
+                    label: 'Machine learning / predictive analytics',
+                    jdKeywords: ['machine learning', ' ml', 'ml ', 'predictive', 'modeling', 'forecast', 'regression', 'classification'],
+                    resumeKeywords: ['machine learning', 'ml', 'predictive', 'modeling', 'forecast', 'regression', 'classification'],
+                    mitigation: 'Connect adjacent analytical work (segmentation, forecasting) and explain how you partner with ML teams or plan to upskill.'
+                },
+                {
+                    id: 'domain_loyalty',
+                    label: 'Loyalty / CRM domain expertise',
+                    jdKeywords: ['loyalty', 'rewards', 'subscription', 'crm', 'lifecycle', 'retention', 'points', 'gamification'],
+                    resumeKeywords: ['loyalty', 'rewards', 'subscription', 'crm', 'retention', 'points', 'lifecycle'],
+                    mitigation: 'Tie your customer segmentation or retention analytics to loyalty mechanics and prepare a quick tear-down of the company program.'
+                },
+                {
+                    id: 'cloud_gcp',
+                    label: 'Google Cloud / BigQuery depth',
+                    jdKeywords: ['google cloud', 'gcp', 'bigquery', 'dataflow', 'cloud composer', 'pub/sub'],
+                    resumeKeywords: ['google cloud', 'gcp', 'bigquery', 'dataflow', 'cloud composer', 'pub/sub'],
+                    mitigation: 'Map your cloud experience to GCP services and mention labs, credentials, or sandbox work you are pursuing.'
+                },
+                {
+                    id: 'cloud_aws',
+                    label: 'AWS analytics stack',
+                    jdKeywords: ['aws', 'redshift', 'athena', 'glue', 'lambda', 'kinesis'],
+                    resumeKeywords: ['aws', 'redshift', 'athena', 'glue', 'lambda', 'kinesis'],
+                    mitigation: 'Explain comparable tooling you have used and outline how you would ramp on the named AWS services.'
+                },
+                {
+                    id: 'cloud_azure',
+                    label: 'Azure analytics services',
+                    jdKeywords: ['azure', 'synapse', 'fabric', 'data factory', 'adf'],
+                    resumeKeywords: ['azure', 'synapse', 'fabric', 'data factory', 'adf'],
+                    mitigation: 'Share analogous experience and note any Azure upskilling (Microsoft Learn paths, sandbox environment).'
+                },
+                {
+                    id: 'leadership',
+                    label: 'People leadership / mentorship stories',
+                    jdKeywords: ['leadership', 'manage a team', 'lead a team', 'mentor', 'coaching', 'people manager'],
+                    resumeKeywords: ['led', 'manage', 'manager', 'mentored', 'mentorship', 'coached', 'team lead'],
+                    mitigation: 'Prepare examples showing how you led initiatives or mentored others, even without formal management authority.'
+                },
+                {
+                    id: 'executive_story',
+                    label: 'Executive storytelling & influence',
+                    jdKeywords: ['executive', 'c-suite', 'vp', 'storytelling', 'narrative', 'influence', 'stakeholder'],
+                    resumeKeywords: ['executive', 'c-suite', 'vp', 'storytelling', 'narrative', 'stakeholder', 'briefed'],
+                    mitigation: 'Rehearse narratives that show how you communicate insights to senior leaders and drive decisions.'
+                },
+                {
+                    id: 'quant_impact',
+                    label: 'Quantified impact storytelling',
+                    requireJD: false,
+                    shouldApply: ({ jdLowerText }) => /impact|metric|kpi|okr|roi|business outcome|results/i.test(jdLowerText || ''),
+                    resumeTest: () => /\d+%|\$\d|\d+(?:k|m|b)/i.test(candidateText),
+                    reason: () => 'Interviewers expect quantified outcomes. Add explicit numbers to your resume bullets and stories.',
+                    mitigation: 'Audit your resume and stories to ensure each one has before/after metrics so interviewers feel the impact.'
+                }
+            ];
+
+            gapRules.forEach(rule => {
+                const requireJD = rule.requireJD !== false;
+                const jdKeyword = rule.jdKeywords ? firstMatch(rawJdLower || jdLower, rule.jdKeywords) : null;
+                if (requireJD && !jdKeyword) return;
+                if (rule.shouldApply && !rule.shouldApply({ jdLowerText: rawJdLower, candidateLower, combinedLower })) return;
+
+                let resumeHasSignal = false;
+                if (typeof rule.resumeTest === 'function') {
+                    resumeHasSignal = !!rule.resumeTest(candidateLower, candidateText, combinedLower);
+                } else {
+                    resumeHasSignal = !!firstMatch(candidateLower, rule.resumeKeywords || rule.jdKeywords || []);
+                }
+                if (resumeHasSignal) return;
+
+                const title = rule.label || rule.id;
+                const reason = rule.reason
+                    ? (typeof rule.reason === 'function'
+                        ? rule.reason(jdKeyword)
+                        : rule.reason.replace('{keyword}', jdKeyword || rule.jdKeywords?.[0] || title))
+                    : (jdKeyword
+                        ? `The job description highlights ${jdKeyword}, but it doesn't appear in your materials yet.`
+                        : 'Highlight how you will close this perceived gap.');
+                const mitigation = typeof rule.mitigation === 'function'
+                    ? rule.mitigation(jdKeyword)
+                    : (rule.mitigation || 'Prepare a mitigation story that shows your ramp-up plan.');
+
+                addGapDetail(title, reason, mitigation, rule.id);
+            });
+
+            const strengthList = Array.from(new Set(strengths));
+            appState.extractedData.strengths = strengthList;
+
+            const limitedGaps = gapDetails.slice(0, 8);
+            appState.extractedData.gapDetails = limitedGaps;
+            appState.extractedData.gaps = limitedGaps.map(detail => detail.title);
         }
         
         // Extract questions from Q&A documents
@@ -4364,6 +4797,8 @@ GROUP BY previous_tier, current_tier;`;
                 metrics,
                 strengths,
                 gaps,
+                gapDetails: gaps.map(g => ({ title: g, reason: '', mitigation: '' })),
+                candidateBackground: 'Seasoned data & analytics leader delivering quantifiable impact across retail, loyalty, and operations with 8+ years of SQL/Python experience.',
                 panelists,
                 panelistQuestions,
                 questions: questions,
@@ -4506,18 +4941,27 @@ GROUP BY previous_tier, current_tier;`;
 
         async function generateGapStrategies() {
             const gapsList = document.getElementById('gapsList');
-            gapsList.innerHTML += `
-                <div style="margin-top: 1rem; padding: 1rem; background: #fef3c7; border-radius: 0.5rem; border-left: 4px solid #0ea5e9;">
-                    <div style="display: flex; align-items: center; margin-bottom: 0.5rem;">${aiBadge()}</div>
-                    <strong>Mitigation Strategies:</strong>
-                    <ul style="margin-top: 0.5rem; font-size: 0.875rem;">
-                        <li>• Emphasize quick learning ability</li>
-                        <li>• Highlight transferable skills</li>
-                        <li>• Show proactive learning steps taken</li>
-                    </ul>
-                </div>
-            `;
-            showToast('Strategies generated!', 'success');
+            if (!gapsList) return;
+
+            const gapDetails = Array.isArray(appState.extractedData.gapDetails) ? appState.extractedData.gapDetails : [];
+            if (!gapDetails.length) {
+                gapsList.innerHTML = '<p style="color:#64748b;">No gaps identified yet. Upload more context or rerun extraction.</p>';
+                showToast('No gaps detected to generate strategies.', 'warning');
+                return;
+            }
+
+            gapsList.innerHTML = gapDetails.map(detail => {
+                const reason = detail.reason ? `<div style=\"font-size:0.85rem; color:#64748b; margin-bottom:0.5rem;\">${detail.reason}</div>` : '';
+                const mitigation = detail.mitigation ? detail.mitigation : 'Outline how you will ramp up and tie a transferable win to this area.';
+                return `
+                    <div style="margin-top: 0.75rem; padding: 1rem; background: #fef3c7; border-radius: 0.5rem; border-left: 4px solid #0ea5e9;">
+                        <div style="display:flex; align-items:center; gap:0.5rem; margin-bottom:0.5rem;">${aiBadge()}<strong>${detail.title}</strong></div>
+                        ${reason}
+                        <div style="font-size:0.85rem; color:#0f172a;"><strong>Plan:</strong> ${mitigation}</div>
+                    </div>`;
+            }).join('');
+
+            showToast('Gap strategies generated from your materials!', 'success');
         }
 
         async function generateCulturalAnalysis() {
@@ -6863,10 +7307,11 @@ ${highlights.join('\n')}
 
                 appState.extractedData.stories = detailedStories;
 
-                // Update all tabs
+                // Update all tabs with existing renderers
                 updatePanelStrategy();
-                updateQuestionsBank();
-                updateStoriesLibrary();
+                updateQuestionBank();
+                updateQuestionList();
+                updateStarStories();
                 
                 showToast('Google interview data loaded successfully!', 'success');
             } catch (error) {
@@ -6877,17 +7322,27 @@ ${highlights.join('\n')}
 
         // Enhanced Q&A interactivity functions
         function toggleQuestionDetail(index) {
-            const detailElement = document.getElementById(`question-detail-${index}`);
-            const chevronElement = document.getElementById(`chevron-${index}`);
-            
-            if (detailElement.style.display === 'none') {
+            const idx = Number(index);
+            if (Number.isNaN(idx)) return;
+            const detailElement = document.getElementById(`question-detail-${idx}`);
+            if (!detailElement) return;
+            const chevronElement = document.getElementById(`chevron-${idx}`);
+
+            const computed = typeof window !== 'undefined' && window.getComputedStyle ? window.getComputedStyle(detailElement) : null;
+            const isHidden = detailElement.style.display === 'none' || (computed && computed.display === 'none');
+
+            if (isHidden) {
                 detailElement.style.display = 'block';
-                chevronElement.style.transform = 'rotate(90deg)';
-                chevronElement.textContent = '▼';
+                if (chevronElement) {
+                    chevronElement.style.transform = 'rotate(90deg)';
+                    chevronElement.textContent = '▼';
+                }
             } else {
                 detailElement.style.display = 'none';
-                chevronElement.style.transform = 'rotate(0deg)';
-                chevronElement.textContent = '▶';
+                if (chevronElement) {
+                    chevronElement.style.transform = 'rotate(0deg)';
+                    chevronElement.textContent = '▶';
+                }
             }
         }
 

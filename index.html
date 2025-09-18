@@ -105,6 +105,31 @@
                     </div>
                 </div>
 
+                <div class="card">
+                    <h3 style="font-size: 1.25rem; font-weight: 600; margin-bottom: 0.75rem;">AI Assist (Optional)</h3>
+                    <p style="font-size: 0.875rem; color: #64748b; margin-bottom: 0.75rem;">
+                        Enter a Gemini API key to enable on-demand AI enrichment. Your key stays in this browser only and is never persisted unless you choose to remember it for the current session.
+                    </p>
+                    <form id="llmKeyForm" autocomplete="off" style="display: flex; flex-direction: column; gap: 0.75rem;">
+                        <div>
+                            <label for="llmKeyInput" style="display: block; font-size: 0.875rem; font-weight: 500; color: #334155; margin-bottom: 0.25rem;">Gemini API Key</label>
+                            <input id="llmKeyInput" name="llmKeyInput" type="password" inputmode="text" spellcheck="false" autocomplete="off" placeholder="AIza..." style="width: 100%; padding: 0.5rem 0.75rem; border: 1px solid #cbd5f5; border-radius: 0.5rem; font-size: 0.95rem; background: #f8fafc;" aria-describedby="llmKeyStatus">
+                        </div>
+                        <label style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.8rem; color: #475569;">
+                            <input id="llmKeyRemember" type="checkbox" style="width: 1rem; height: 1rem;"> Remember for this browser session
+                        </label>
+                        <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
+                            <button type="submit" class="btn btn-primary" style="flex: 1 0 180px;">
+                                Enable LLM Assist
+                            </button>
+                            <button type="button" class="btn btn-secondary" data-action="clear-llm-key" style="flex: 1 0 140px;">
+                                Clear Key
+                            </button>
+                        </div>
+                        <div id="llmKeyStatus" style="font-size: 0.8rem; color: #64748b;">LLM assist is currently disabled. Deterministic parsing only.</div>
+                    </form>
+                </div>
+
                 <!-- Upload Checklist -->
                 <div class="card" id="uploadChecklistCard">
                     <h3 style="font-size: 1.25rem; font-weight: 600; margin-bottom: 0.75rem;">Upload Checklist</h3>
